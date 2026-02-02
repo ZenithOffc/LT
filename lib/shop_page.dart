@@ -2,7 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
-import 'nokos_page.dart';
+import 'role_shop_page.dart'; // ← GANTI DARI nokos_page.dart KE role_shop_page.dart
 import 'bugshop_page.dart';
 
 class ShopPage extends StatefulWidget {
@@ -11,7 +11,7 @@ class ShopPage extends StatefulWidget {
   final String sessionKey;
   final String role;
   final String expiredDate;
-  final Function(String)? onCoinUpdate; // ✅ TAMBAHAN: Callback untuk update coin
+  final Function(String)? onCoinUpdate;
 
   const ShopPage({
     super.key,
@@ -20,7 +20,7 @@ class ShopPage extends StatefulWidget {
     required this.sessionKey,
     required this.role,
     required this.expiredDate,
-    this.onCoinUpdate, // ✅ TAMBAHAN: Optional callback
+    this.onCoinUpdate,
   });
 
   @override
@@ -106,11 +106,12 @@ class _ShopPageState extends State<ShopPage> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  void _navigateToNokos() {
+  // ← GANTI NAMA FUNGSI DAN NAVIGASI
+  void _navigateToRoleShop() {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => NokosPage(
+        builder: (context) => RoleShopPage(
           username: widget.username,
           password: widget.password,
           sessionKey: widget.sessionKey,
@@ -131,7 +132,7 @@ class _ShopPageState extends State<ShopPage> with TickerProviderStateMixin {
           sessionKey: widget.sessionKey,
           role: widget.role,
           expiredDate: widget.expiredDate,
-          onCoinUpdate: widget.onCoinUpdate, // ✅ TAMBAHAN: Teruskan callback ke BugShopPage
+          onCoinUpdate: widget.onCoinUpdate,
         ),
       ),
     );
@@ -491,18 +492,18 @@ class _ShopPageState extends State<ShopPage> with TickerProviderStateMixin {
                   _buildVideoBanner(),
                   const SizedBox(height: 8),
                   
-                  // Nokos Shop Button
+                  // ← GANTI DARI NOKOS SHOP KE ROLE SHOP
                   _buildShopButton(
-                    icon: Icons.phone_android,
-                    title: "Nokos Shop",
-                    description: "Buy OTP numbers for verification",
-                    color: accentBlue,
-                    onTap: _navigateToNokos,
+                    icon: Icons.store, // ← Icon berubah dari phone_android
+                    title: "Role Shop", // ← Title berubah
+                    description: "Upgrade your membership role", // ← Description berubah
+                    color: goldColor, // ← Color berubah ke gold untuk premium feel
+                    onTap: _navigateToRoleShop, // ← OnTap berubah
                   ),
                   
                   const SizedBox(height: 6),
                   
-                  // Bug Shop Button
+                  // Bug Shop Button (Tetap sama)
                   _buildShopButton(
                     icon: Icons.bug_report,
                     title: "Bug Shop",
