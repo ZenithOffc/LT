@@ -4,22 +4,13 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 
-/// 🛒 SHOP NOKOS PAGE - Complete Implementation
-/// Semua REST API endpoint telah diimplementasikan dengan lengkap
-/// 
-/// API Endpoints yang tersedia:
-/// ✅ GET  /shop/config       - Config shop
-/// ✅ GET  /shop/profile      - User profile & balance
-/// ✅ GET  /shop/services     - Daftar layanan (paginated)
-/// ✅ GET  /shop/countries    - Negara untuk service
-/// ✅ GET  /shop/prices       - Harga (server 3 only)
-/// ✅ POST /shop/order        - Beli nomor OTP
-/// ✅ GET  /shop/check-otp    - Cek kode OTP
-/// ✅ POST /shop/refund       - Refund nomor
-/// ✅ POST /shop/deposit/create - Buat deposit QRIS
-/// ✅ POST /shop/deposit/check  - Cek pembayaran deposit
-/// ✅ GET  /shop/orders       - Riwayat order
-/// ✅ GET  /shop/deposits     - Riwayat deposit
+/// 🛒 SHOP NOKOS PAGE - FIXED VERSION
+/// ✅ Bug fixes:
+/// - Empty/loading state handling
+/// - Better error messages
+/// - Debug logging
+/// - Scroll behavior fixed
+/// - Button tap issues resolved
 
 class NokosPage extends StatefulWidget {
   final String username;
@@ -104,6 +95,9 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
 
+  // Scroll Controller
+  final ScrollController _servicesScrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
@@ -119,16 +113,21 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
 
     _fadeController.forward();
     
-    // Initial data load
-    _loadConfig();
-    _loadProfile();
-    _loadServices();
+    // Initial data load with delay to ensure widget is built
+    Future.delayed(Duration(milliseconds: 300), () {
+      if (mounted) {
+        _loadConfig();
+        _loadProfile();
+        _loadServices();
+      }
+    });
   }
 
   @override
   void dispose() {
     _fadeController.dispose();
     _searchController.dispose();
+    _servicesScrollController.dispose();
     super.dispose();
   }
 
@@ -137,35 +136,43 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
   // ==========================================
 
   /// ✅ GET /shop/config
-  /// Mendapatkan konfigurasi shop (min_deposit, markup, dll)
   Future<void> _loadConfig() async {
     try {
+      debugPrint('🔄 [CONFIG] Loading config...');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/shop/config'),
-      );
+      ).timeout(Duration(seconds: 10));
 
+      debugPrint('📡 [CONFIG] Status: ${response.statusCode}');
+      
       final data = json.decode(response.body);
       
       if (data['valid'] == true && data['success'] == true) {
         setState(() {
           _configData = data['data'];
         });
-        debugPrint('✅ Config loaded: ${data['data']}');
+        debugPrint('✅ [CONFIG] Loaded: ${data['data']}');
+      } else {
+        debugPrint('⚠️ [CONFIG] Failed: ${data['message']}');
       }
     } catch (e) {
-      debugPrint('❌ Error loading config: $e');
+      debugPrint('❌ [CONFIG] Error: $e');
     }
   }
 
   /// ✅ GET /shop/profile
-  /// Mendapatkan profil user & saldo
   Future<void> _loadProfile() async {
     setState(() => _isLoadingProfile = true);
     
     try {
+      debugPrint('🔄 [PROFILE] Loading profile...');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/shop/profile?key=${widget.sessionKey}'),
-      );
+      ).timeout(Duration(seconds: 10));
+
+      debugPrint('📡 [PROFILE] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
@@ -174,53 +181,69 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           _profileData = data['data'];
           _isLoadingProfile = false;
         });
-        debugPrint('✅ Profile loaded: ${data['data']}');
+        debugPrint('✅ [PROFILE] Loaded: ${data['data']}');
       } else {
         setState(() => _isLoadingProfile = false);
+        debugPrint('⚠️ [PROFILE] Failed: ${data['message']}');
         _showErrorSnackbar(data['message'] ?? 'Failed to load profile');
       }
     } catch (e) {
-      debugPrint('❌ Error loading profile: $e');
+      debugPrint('❌ [PROFILE] Error: $e');
       setState(() => _isLoadingProfile = false);
-      _showErrorSnackbar('Network error: $e');
+      _showErrorSnackbar('Network error. Please check your connection.');
     }
   }
 
-  /// ✅ GET /shop/services
-  /// Mendapatkan daftar layanan dengan pagination
+  /// ✅ GET /shop/services - FIXED WITH BETTER ERROR HANDLING
   Future<void> _loadServices({int page = 0, int limit = 20}) async {
     setState(() => _isLoadingServices = true);
     
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/shop/services?key=${widget.sessionKey}&page=$page&limit=$limit'),
-      );
+      debugPrint('🔄 [SERVICES] Loading services... page=$page, limit=$limit');
+      
+      final uri = Uri.parse('$baseUrl/shop/services?key=${widget.sessionKey}&page=$page&limit=$limit');
+      debugPrint('📡 [SERVICES] URL: $uri');
+      
+      final response = await http.get(uri).timeout(Duration(seconds: 15));
+
+      debugPrint('📡 [SERVICES] Status: ${response.statusCode}');
+      debugPrint('📡 [SERVICES] Body: ${response.body.substring(0, response.body.length > 200 ? 200 : response.body.length)}...');
+
+      if (response.statusCode != 200) {
+        throw Exception('HTTP ${response.statusCode}');
+      }
 
       final data = json.decode(response.body);
       
       if (data['valid'] == true && data['success'] == true) {
+        final services = List<Map<String, dynamic>>.from(data['data']['services']);
+        
         setState(() {
-          _services = List<Map<String, dynamic>>.from(data['data']['services']);
+          _services = services;
           _currentPage = data['data']['pagination']['page'];
           _totalPages = data['data']['pagination']['totalPages'];
           _hasNextPage = data['data']['pagination']['hasNext'];
           _hasPrevPage = data['data']['pagination']['hasPrev'];
           _isLoadingServices = false;
         });
-        debugPrint('✅ Services loaded: ${_services.length} items, page $_currentPage/$_totalPages');
+        
+        debugPrint('✅ [SERVICES] Loaded ${services.length} items');
+        debugPrint('📄 [SERVICES] Page $_currentPage of $_totalPages');
       } else {
         setState(() => _isLoadingServices = false);
+        debugPrint('⚠️ [SERVICES] API Error: ${data['message']}');
         _showErrorSnackbar(data['message'] ?? 'Failed to load services');
       }
-    } catch (e) {
-      debugPrint('❌ Error loading services: $e');
+    } catch (e, stackTrace) {
+      debugPrint('❌ [SERVICES] Error: $e');
+      debugPrint('📍 [SERVICES] Stack: ${stackTrace.toString().substring(0, 300)}');
+      
       setState(() => _isLoadingServices = false);
-      _showErrorSnackbar('Network error: $e');
+      _showErrorSnackbar('Failed to load services. Check connection.');
     }
   }
 
   /// ✅ GET /shop/countries
-  /// Mendapatkan daftar negara untuk layanan tertentu
   Future<void> _loadCountries(String serviceCode, String serviceName) async {
     setState(() {
       _isLoadingCountries = true;
@@ -233,9 +256,13 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
     });
     
     try {
+      debugPrint('🔄 [COUNTRIES] Loading for service: $serviceCode');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/shop/countries?key=${widget.sessionKey}&serviceCode=$serviceCode'),
-      );
+      ).timeout(Duration(seconds: 10));
+
+      debugPrint('📡 [COUNTRIES] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
@@ -244,20 +271,25 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           _countries = List<Map<String, dynamic>>.from(data['data']['countries']);
           _isLoadingCountries = false;
         });
-        debugPrint('✅ Countries loaded: ${_countries.length} items for $serviceCode');
+        debugPrint('✅ [COUNTRIES] Loaded ${_countries.length} items');
+        
+        // Auto show countries dialog
+        Future.delayed(Duration(milliseconds: 300), () {
+          if (mounted) _showCountriesDialog();
+        });
       } else {
         setState(() => _isLoadingCountries = false);
+        debugPrint('⚠️ [COUNTRIES] Failed: ${data['message']}');
         _showErrorSnackbar(data['message'] ?? 'Failed to load countries');
       }
     } catch (e) {
-      debugPrint('❌ Error loading countries: $e');
+      debugPrint('❌ [COUNTRIES] Error: $e');
       setState(() => _isLoadingCountries = false);
       _showErrorSnackbar('Network error: $e');
     }
   }
 
   /// ✅ GET /shop/prices
-  /// Mendapatkan daftar harga (FILTER SERVER 3 ONLY)
   Future<void> _loadPrices(String serviceCode, int numberId, String countryName) async {
     setState(() {
       _isLoadingPrices = true;
@@ -266,9 +298,13 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
     });
     
     try {
+      debugPrint('🔄 [PRICES] Loading for country: $countryName');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/shop/prices?key=${widget.sessionKey}&serviceCode=$serviceCode&numberId=$numberId'),
-      );
+      ).timeout(Duration(seconds: 10));
+
+      debugPrint('📡 [PRICES] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
@@ -277,29 +313,36 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           _prices = List<Map<String, dynamic>>.from(data['data']['prices']);
           _isLoadingPrices = false;
         });
-        debugPrint('✅ Prices loaded: ${_prices.length} items for $countryName');
+        debugPrint('✅ [PRICES] Loaded ${_prices.length} items');
+        
+        // Auto show prices dialog
+        Future.delayed(Duration(milliseconds: 300), () {
+          if (mounted) _showPricesDialog();
+        });
       } else {
         setState(() => _isLoadingPrices = false);
+        debugPrint('⚠️ [PRICES] Failed: ${data['message']}');
         _showErrorSnackbar(data['message'] ?? 'Failed to load prices');
       }
     } catch (e) {
-      debugPrint('❌ Error loading prices: $e');
+      debugPrint('❌ [PRICES] Error: $e');
       setState(() => _isLoadingPrices = false);
       _showErrorSnackbar('Network error: $e');
     }
   }
 
   /// ✅ POST /shop/order
-  /// Membeli nomor OTP
   Future<void> _createOrder() async {
     if (_selectedServiceCode == null || _selectedCountry == null || _selectedPrice == null) {
-      _showErrorSnackbar('Please select service, country, and price');
+      _showErrorSnackbar('Please complete all selections');
       return;
     }
 
     _showLoadingDialog();
 
     try {
+      debugPrint('🔄 [ORDER] Creating order...');
+      
       final response = await http.post(
         Uri.parse('$baseUrl/shop/order'),
         headers: {'Content-Type': 'application/json'},
@@ -309,64 +352,70 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           'numberId': _selectedCountry!['id'],
           'providerId': _selectedPrice!['providerId'],
         }),
-      );
+      ).timeout(Duration(seconds: 15));
 
       Navigator.pop(context); // Close loading
+
+      debugPrint('📡 [ORDER] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
       if (data['valid'] == true && data['success'] == true) {
-        debugPrint('✅ Order created: ${data['data']}');
+        debugPrint('✅ [ORDER] Created: ${data['data']['orderId']}');
         _showOrderSuccessDialog(data['data']);
-        await _loadProfile(); // Refresh balance
-        await _loadOrders(); // Refresh orders
+        await _loadProfile();
+        await _loadOrders();
         _resetSelection();
       } else {
+        debugPrint('⚠️ [ORDER] Failed: ${data['message']}');
         _showErrorDialog(data['message'] ?? 'Order failed');
       }
     } catch (e) {
       Navigator.pop(context);
-      debugPrint('❌ Error creating order: $e');
+      debugPrint('❌ [ORDER] Error: $e');
       _showErrorDialog('Network error: $e');
     }
   }
 
   /// ✅ GET /shop/check-otp
-  /// Cek kode OTP dari order
   Future<void> _checkOTP(String orderId) async {
     _showLoadingDialog();
     
     try {
+      debugPrint('🔄 [OTP] Checking OTP for: $orderId');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/shop/check-otp?key=${widget.sessionKey}&orderId=$orderId'),
-      );
+      ).timeout(Duration(seconds: 10));
 
-      Navigator.pop(context); // Close loading
+      Navigator.pop(context);
+
+      debugPrint('📡 [OTP] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
       if (data['valid'] == true && data['success'] == true) {
         if (data['data']['hasOtp'] == true) {
-          debugPrint('✅ OTP found: ${data['data']['otpCode']}');
+          debugPrint('✅ [OTP] Found: ${data['data']['otpCode']}');
           _showOTPDialog(data['data']);
-          await _loadOrders(); // Refresh to update status
+          await _loadOrders();
         } else {
+          debugPrint('⚠️ [OTP] Not ready yet');
           _showInfoDialog('OTP Not Ready', 'OTP code has not been received yet. Please wait and try again.');
         }
       } else {
+        debugPrint('⚠️ [OTP] Failed: ${data['message']}');
         _showErrorDialog(data['message'] ?? 'Failed to check OTP');
       }
     } catch (e) {
       Navigator.pop(context);
-      debugPrint('❌ Error checking OTP: $e');
+      debugPrint('❌ [OTP] Error: $e');
       _showErrorDialog('Network error: $e');
     }
   }
 
   /// ✅ POST /shop/refund
-  /// Refund nomor (setelah delay)
   Future<void> _refundOrder(String orderId) async {
-    // Confirm dialog
     final confirm = await showDialog<bool>(
       context: context,
       builder: (context) => _buildConfirmDialog(
@@ -380,6 +429,8 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
     _showLoadingDialog();
 
     try {
+      debugPrint('🔄 [REFUND] Processing: $orderId');
+      
       final response = await http.post(
         Uri.parse('$baseUrl/shop/refund'),
         headers: {'Content-Type': 'application/json'},
@@ -387,32 +438,34 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           'key': widget.sessionKey,
           'orderId': orderId,
         }),
-      );
+      ).timeout(Duration(seconds: 15));
 
-      Navigator.pop(context); // Close loading
+      Navigator.pop(context);
+
+      debugPrint('📡 [REFUND] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
       if (data['valid'] == true && data['success'] == true) {
-        debugPrint('✅ Refund successful: ${data['data']}');
+        debugPrint('✅ [REFUND] Success: ${data['data']}');
         _showSuccessDialog('Refund Successful', 
           'Amount refunded: Rp ${_formatNumber(data['data']['refundedAmount'])}\n'
           'New balance: Rp ${_formatNumber(data['data']['newBalance'])}'
         );
-        await _loadProfile(); // Refresh balance
-        await _loadOrders(); // Refresh orders
+        await _loadProfile();
+        await _loadOrders();
       } else {
+        debugPrint('⚠️ [REFUND] Failed: ${data['message']}');
         _showErrorDialog(data['message'] ?? 'Refund failed');
       }
     } catch (e) {
       Navigator.pop(context);
-      debugPrint('❌ Error refunding order: $e');
+      debugPrint('❌ [REFUND] Error: $e');
       _showErrorDialog('Network error: $e');
     }
   }
 
   /// ✅ POST /shop/deposit/create
-  /// Membuat deposit QRIS
   Future<void> _createDeposit(int amount) async {
     if (_configData != null) {
       final minDeposit = _configData!['min_deposit'] ?? 1000;
@@ -425,6 +478,8 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
     _showLoadingDialog();
 
     try {
+      debugPrint('🔄 [DEPOSIT] Creating: Rp ${_formatNumber(amount)}');
+      
       final response = await http.post(
         Uri.parse('$baseUrl/shop/deposit/create'),
         headers: {'Content-Type': 'application/json'},
@@ -432,31 +487,35 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           'key': widget.sessionKey,
           'amount': amount,
         }),
-      );
+      ).timeout(Duration(seconds: 15));
 
-      Navigator.pop(context); // Close loading
+      Navigator.pop(context);
+
+      debugPrint('📡 [DEPOSIT] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
       if (data['valid'] == true && data['success'] == true) {
-        debugPrint('✅ Deposit created: ${data['data']['orderId']}');
+        debugPrint('✅ [DEPOSIT] Created: ${data['data']['orderId']}');
         _showQRISDialog(data['data']);
       } else {
+        debugPrint('⚠️ [DEPOSIT] Failed: ${data['message']}');
         _showErrorDialog(data['message'] ?? 'Failed to create deposit');
       }
     } catch (e) {
       Navigator.pop(context);
-      debugPrint('❌ Error creating deposit: $e');
+      debugPrint('❌ [DEPOSIT] Error: $e');
       _showErrorDialog('Network error: $e');
     }
   }
 
   /// ✅ POST /shop/deposit/check
-  /// Cek status pembayaran deposit
   Future<void> _checkDepositStatus(String orderId) async {
     _showLoadingDialog();
 
     try {
+      debugPrint('🔄 [DEPOSIT CHECK] Checking: $orderId');
+      
       final response = await http.post(
         Uri.parse('$baseUrl/shop/deposit/check'),
         headers: {'Content-Type': 'application/json'},
@@ -464,41 +523,47 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           'key': widget.sessionKey,
           'orderId': orderId,
         }),
-      );
+      ).timeout(Duration(seconds: 10));
 
-      Navigator.pop(context); // Close loading
+      Navigator.pop(context);
+
+      debugPrint('📡 [DEPOSIT CHECK] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
       if (data['valid'] == true && data['success'] == true) {
-        debugPrint('✅ Deposit completed: ${data['data']}');
+        debugPrint('✅ [DEPOSIT CHECK] Completed: ${data['data']}');
         _showSuccessDialog('Deposit Successful!', 
           'Amount: Rp ${_formatNumber(data['data']['amount'])}\n'
           'Total Paid: Rp ${_formatNumber(data['data']['totalPaid'])}\n'
           'New Balance: Rp ${_formatNumber(data['data']['newBalance'])}\n'
           'Completed at: ${data['data']['completedAt']}'
         );
-        await _loadProfile(); // Refresh balance
-        await _loadDeposits(); // Refresh deposits
+        await _loadProfile();
+        await _loadDeposits();
       } else {
+        debugPrint('⚠️ [DEPOSIT CHECK] Not ready: ${data['message']}');
         _showInfoDialog('Payment Not Detected', data['message'] ?? 'Payment has not been completed yet.');
       }
     } catch (e) {
       Navigator.pop(context);
-      debugPrint('❌ Error checking deposit: $e');
+      debugPrint('❌ [DEPOSIT CHECK] Error: $e');
       _showErrorDialog('Network error: $e');
     }
   }
 
   /// ✅ GET /shop/orders
-  /// Mendapatkan riwayat order
   Future<void> _loadOrders({int limit = 20}) async {
     setState(() => _isLoadingOrders = true);
     
     try {
+      debugPrint('🔄 [ORDERS] Loading orders...');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/shop/orders?key=${widget.sessionKey}&limit=$limit'),
-      );
+      ).timeout(Duration(seconds: 10));
+
+      debugPrint('📡 [ORDERS] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
@@ -507,27 +572,31 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           _orders = List<Map<String, dynamic>>.from(data['data']['orders']);
           _isLoadingOrders = false;
         });
-        debugPrint('✅ Orders loaded: ${_orders.length} items');
+        debugPrint('✅ [ORDERS] Loaded ${_orders.length} items');
       } else {
         setState(() => _isLoadingOrders = false);
+        debugPrint('⚠️ [ORDERS] Failed: ${data['message']}');
         _showErrorSnackbar(data['message'] ?? 'Failed to load orders');
       }
     } catch (e) {
-      debugPrint('❌ Error loading orders: $e');
+      debugPrint('❌ [ORDERS] Error: $e');
       setState(() => _isLoadingOrders = false);
       _showErrorSnackbar('Network error: $e');
     }
   }
 
   /// ✅ GET /shop/deposits
-  /// Mendapatkan riwayat deposit
   Future<void> _loadDeposits({int limit = 20}) async {
     setState(() => _isLoadingDeposits = true);
     
     try {
+      debugPrint('🔄 [DEPOSITS] Loading deposits...');
+      
       final response = await http.get(
         Uri.parse('$baseUrl/shop/deposits?key=${widget.sessionKey}&limit=$limit'),
-      );
+      ).timeout(Duration(seconds: 10));
+
+      debugPrint('📡 [DEPOSITS] Status: ${response.statusCode}');
 
       final data = json.decode(response.body);
       
@@ -536,13 +605,14 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           _deposits = List<Map<String, dynamic>>.from(data['data']['deposits']);
           _isLoadingDeposits = false;
         });
-        debugPrint('✅ Deposits loaded: ${_deposits.length} items');
+        debugPrint('✅ [DEPOSITS] Loaded ${_deposits.length} items');
       } else {
         setState(() => _isLoadingDeposits = false);
+        debugPrint('⚠️ [DEPOSITS] Failed: ${data['message']}');
         _showErrorSnackbar(data['message'] ?? 'Failed to load deposits');
       }
     } catch (e) {
-      debugPrint('❌ Error loading deposits: $e');
+      debugPrint('❌ [DEPOSITS] Error: $e');
       setState(() => _isLoadingDeposits = false);
       _showErrorSnackbar('Network error: $e');
     }
@@ -614,6 +684,7 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
   }
 
   void _showErrorSnackbar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -631,11 +702,13 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
         backgroundColor: accentRed,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: Duration(seconds: 3),
       ),
     );
   }
 
   void _showSuccessSnackbar(String message) {
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Row(
@@ -653,6 +726,7 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
         backgroundColor: Colors.green,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        duration: Duration(seconds: 2),
       ),
     );
   }
@@ -1094,6 +1168,7 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
             SizedBox(height: 12),
             Wrap(
               spacing: 8,
+              runSpacing: 8,
               children: [5000, 10000, 25000, 50000, 100000].map((amount) {
                 return ChoiceChip(
                   label: Text('${_formatNumber(amount)}'),
@@ -1389,12 +1464,15 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
             label,
             style: TextStyle(color: Colors.white60, fontSize: 13),
           ),
-          Text(
-            value,
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
+          Flexible(
+            child: Text(
+              value,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 13,
+                fontWeight: FontWeight.w500,
+              ),
+              textAlign: TextAlign.right,
             ),
           ),
         ],
@@ -1532,7 +1610,7 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
       children: [
         _buildProfileHeader(),
         
-        // Order Summary Card
+        // Order Summary Card (FIXED)
         if (_selectedServiceCode != null || _selectedCountry != null || _selectedPrice != null)
           _buildGlassCard(
             child: Column(
@@ -1619,87 +1697,18 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
             ),
           ),
         
-        // Selection Buttons
+        // Info Card (REMOVED SELECT SERVICE BUTTON)
         _buildGlassCard(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Select Options',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              SizedBox(height: 16),
-              _buildSelectionButton(
-                icon: Icons.apps,
-                label: 'Select Service',
-                value: _selectedServiceName,
-                onTap: () {
-                  // Show services list
-                  setState(() => _currentTabIndex = 0);
-                },
-                color: accentBlue,
-              ),
-              if (_selectedServiceCode != null) ...[
-                SizedBox(height: 8),
-                _buildSelectionButton(
-                  icon: Icons.public,
-                  label: 'Select Country',
-                  value: _selectedCountry?['name'],
-                  onTap: _showCountriesDialog,
-                  color: accentBlue,
-                  isLoading: _isLoadingCountries,
-                ),
-              ],
-              if (_selectedCountry != null) ...[
-                SizedBox(height: 8),
-                _buildSelectionButton(
-                  icon: Icons.attach_money,
-                  label: 'Select Price',
-                  value: _selectedPrice?['displayPrice'],
-                  onTap: _showPricesDialog,
-                  color: goldColor,
-                  isLoading: _isLoadingPrices,
-                ),
-              ],
-            ],
-          ),
-        ),
-        
-        // Services List
-        Padding(
-          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
           child: Row(
             children: [
+              Icon(Icons.info_outline, color: accentBlue, size: 20),
+              SizedBox(width: 12),
               Expanded(
-                child: TextField(
-                  controller: _searchController,
-                  onChanged: (value) {
-                    setState(() => _searchQuery = value);
-                  },
-                  style: TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Search services...',
-                    hintStyle: TextStyle(color: Colors.white60),
-                    prefixIcon: Icon(Icons.search, color: Colors.white60),
-                    suffixIcon: _searchQuery.isNotEmpty
-                        ? IconButton(
-                            icon: Icon(Icons.clear, color: Colors.white60),
-                            onPressed: () {
-                              _searchController.clear();
-                              setState(() => _searchQuery = '');
-                            },
-                          )
-                        : null,
-                    filled: true,
-                    fillColor: cardDark,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(12),
-                      borderSide: BorderSide.none,
-                    ),
+                child: Text(
+                  'Select a service from the list below to start',
+                  style: TextStyle(
+                    color: Colors.white70,
+                    fontSize: 13,
                   ),
                 ),
               ),
@@ -1707,86 +1716,194 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
           ),
         ),
         
-        Expanded(
-          child: _isLoadingServices
-              ? Center(child: CircularProgressIndicator(color: accentBlue))
-              : _filteredServices.isEmpty
-                  ? Center(
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(Icons.inbox, color: Colors.white30, size: 64),
-                          SizedBox(height: 16),
-                          Text(
-                            'No services found',
-                            style: TextStyle(color: Colors.white60),
-                          ),
-                        ],
-                      ),
-                    )
-                  : ListView.builder(
-                      padding: EdgeInsets.symmetric(horizontal: 16),
-                      itemCount: _filteredServices.length,
-                      itemBuilder: (context, index) {
-                        final service = _filteredServices[index];
-                        final isSelected = _selectedServiceCode == service['code'];
-                        
-                        return Container(
-                          margin: EdgeInsets.only(bottom: 12),
-                          decoration: BoxDecoration(
-                            color: isSelected 
-                                ? accentBlue.withOpacity(0.2) 
-                                : cardDark,
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color: isSelected 
-                                  ? accentBlue 
-                                  : Colors.white10,
-                            ),
-                          ),
-                          child: ListTile(
-                            onTap: () {
-                              _loadCountries(
-                                service['code'],
-                                service['name'],
-                              );
-                            },
-                            leading: Container(
-                              padding: EdgeInsets.all(10),
-                              decoration: BoxDecoration(
-                                color: accentBlue.withOpacity(0.2),
-                                borderRadius: BorderRadius.circular(10),
-                              ),
-                              child: Icon(
-                                Icons.apps,
-                                color: accentBlue,
-                                size: 24,
-                              ),
-                            ),
-                            title: Text(
-                              service['name'] ?? 'Unknown Service',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            subtitle: Text(
-                              service['code'] ?? '',
-                              style: TextStyle(
-                                color: Colors.white60,
-                                fontSize: 12,
-                              ),
-                            ),
-                            trailing: isSelected
-                                ? Icon(Icons.check_circle, color: accentBlue)
-                                : Icon(Icons.arrow_forward_ios, color: Colors.white30, size: 16),
-                          ),
-                        );
+        // Search Bar
+        Padding(
+          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: TextField(
+            controller: _searchController,
+            onChanged: (value) {
+              setState(() => _searchQuery = value);
+            },
+            style: TextStyle(color: Colors.white),
+            decoration: InputDecoration(
+              hintText: 'Search services...',
+              hintStyle: TextStyle(color: Colors.white60),
+              prefixIcon: Icon(Icons.search, color: Colors.white60),
+              suffixIcon: _searchQuery.isNotEmpty
+                  ? IconButton(
+                      icon: Icon(Icons.clear, color: Colors.white60),
+                      onPressed: () {
+                        _searchController.clear();
+                        setState(() => _searchQuery = '');
                       },
-                    ),
+                    )
+                  : null,
+              filled: true,
+              fillColor: cardDark,
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(12),
+                borderSide: BorderSide.none,
+              ),
+            ),
+          ),
         ),
         
-        // Pagination
+        // Services List (FIXED WITH BETTER ERROR HANDLING)
+        Expanded(
+          child: Builder(
+            builder: (context) {
+              // Loading state
+              if (_isLoadingServices) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      CircularProgressIndicator(color: accentBlue),
+                      SizedBox(height: 16),
+                      Text(
+                        'Loading services...',
+                        style: TextStyle(color: Colors.white60),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              // Empty state
+              if (_services.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.inbox, color: Colors.white30, size: 64),
+                      SizedBox(height: 16),
+                      Text(
+                        'No services available',
+                        style: TextStyle(
+                          color: Colors.white60,
+                          fontSize: 16,
+                          fontWeight: FontWeight.w500,
+                        ),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Please check your connection',
+                        style: TextStyle(color: Colors.white30, fontSize: 12),
+                      ),
+                      SizedBox(height: 24),
+                      ElevatedButton.icon(
+                        onPressed: _loadServices,
+                        icon: Icon(Icons.refresh, size: 20),
+                        label: Text('Retry'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accentBlue,
+                          padding: EdgeInsets.symmetric(horizontal: 24, vertical: 12),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              // Filtered services
+              final filteredServices = _filteredServices;
+
+              if (filteredServices.isEmpty) {
+                return Center(
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    children: [
+                      Icon(Icons.search_off, color: Colors.white30, size: 64),
+                      SizedBox(height: 16),
+                      Text(
+                        'No services found',
+                        style: TextStyle(color: Colors.white60),
+                      ),
+                      SizedBox(height: 8),
+                      Text(
+                        'Try different search terms',
+                        style: TextStyle(color: Colors.white30, fontSize: 12),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              // Success - show list
+              return ListView.builder(
+                controller: _servicesScrollController,
+                padding: EdgeInsets.symmetric(horizontal: 16),
+                physics: AlwaysScrollableScrollPhysics(),
+                itemCount: filteredServices.length,
+                itemBuilder: (context, index) {
+                  final service = filteredServices[index];
+                  final isSelected = _selectedServiceCode == service['code'];
+                  
+                  return Container(
+                    margin: EdgeInsets.only(bottom: 12),
+                    decoration: BoxDecoration(
+                      color: isSelected 
+                          ? accentBlue.withOpacity(0.2) 
+                          : cardDark,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(
+                        color: isSelected 
+                            ? accentBlue 
+                            : Colors.white10,
+                      ),
+                    ),
+                    child: Material(
+                      color: Colors.transparent,
+                      child: InkWell(
+                        onTap: () {
+                          debugPrint('🎯 Service tapped: ${service['name']}');
+                          _loadCountries(
+                            service['code'],
+                            service['name'],
+                          );
+                        },
+                        borderRadius: BorderRadius.circular(12),
+                        child: ListTile(
+                          leading: Container(
+                            padding: EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: accentBlue.withOpacity(0.2),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: Icon(
+                              Icons.apps,
+                              color: accentBlue,
+                              size: 24,
+                            ),
+                          ),
+                          title: Text(
+                            service['name'] ?? 'Unknown Service',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          subtitle: Text(
+                            service['code'] ?? '',
+                            style: TextStyle(
+                              color: Colors.white60,
+                              fontSize: 12,
+                            ),
+                          ),
+                          trailing: isSelected
+                              ? Icon(Icons.check_circle, color: accentBlue)
+                              : Icon(Icons.arrow_forward_ios, color: Colors.white30, size: 16),
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              );
+            },
+          ),
+        ),
+        
+        // Pagination (FIXED)
         if (_totalPages > 1)
           Container(
             padding: EdgeInsets.all(16),
@@ -1799,13 +1916,17 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
               children: [
                 ElevatedButton.icon(
                   onPressed: _hasPrevPage 
-                      ? () => _loadServices(page: _currentPage - 1)
+                      ? () {
+                          debugPrint('⬅️ Previous page');
+                          _loadServices(page: _currentPage - 1);
+                        }
                       : null,
                   icon: Icon(Icons.arrow_back, size: 16),
                   label: Text('Previous'),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _hasPrevPage ? accentBlue : Colors.grey,
                     foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.grey[800],
                   ),
                 ),
                 Text(
@@ -1814,13 +1935,17 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
                 ),
                 ElevatedButton.icon(
                   onPressed: _hasNextPage 
-                      ? () => _loadServices(page: _currentPage + 1)
+                      ? () {
+                          debugPrint('➡️ Next page');
+                          _loadServices(page: _currentPage + 1);
+                        }
                       : null,
-                  icon: Icon(Icons.arrow_forward, size: 16),
                   label: Text('Next'),
+                  icon: Icon(Icons.arrow_forward, size: 16),
                   style: ElevatedButton.styleFrom(
                     backgroundColor: _hasNextPage ? accentBlue : Colors.grey,
                     foregroundColor: Colors.white,
+                    disabledBackgroundColor: Colors.grey[800],
                   ),
                 ),
               ],
@@ -1868,80 +1993,8 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
     );
   }
 
-  Widget _buildSelectionButton({
-    required IconData icon,
-    required String label,
-    String? value,
-    required VoidCallback onTap,
-    required Color color,
-    bool isLoading = false,
-  }) {
-    return GestureDetector(
-      onTap: isLoading ? null : onTap,
-      child: Container(
-        padding: EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: color.withOpacity(0.3),
-            width: 1.5,
-          ),
-        ),
-        child: Row(
-          children: [
-            Container(
-              padding: EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: color.withOpacity(0.2),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Icon(icon, color: color, size: 20),
-            ),
-            SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    label,
-                    style: TextStyle(
-                      color: Colors.white60,
-                      fontSize: 12,
-                    ),
-                  ),
-                  if (value != null)
-                    Text(
-                      value,
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                ],
-              ),
-            ),
-            if (isLoading)
-              SizedBox(
-                height: 20,
-                width: 20,
-                child: CircularProgressIndicator(
-                  color: color,
-                  strokeWidth: 2,
-                ),
-              )
-            else
-              Icon(Icons.arrow_forward_ios, color: color.withOpacity(0.8), size: 16),
-          ],
-        ),
-      ),
-    );
-  }
-
   Widget _buildOrdersTab() {
     if (_orders.isEmpty && !_isLoadingOrders) {
-      // Load orders on first view
       Future.delayed(Duration.zero, _loadOrders);
     }
 
@@ -1952,18 +2005,23 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
       child: _isLoadingOrders
           ? Center(child: CircularProgressIndicator(color: accentBlue))
           : _orders.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(Icons.receipt_long, color: Colors.white30, size: 64),
-                      SizedBox(height: 16),
-                      Text(
-                        'No orders yet',
-                        style: TextStyle(color: Colors.white60),
+              ? ListView(
+                  children: [
+                    SizedBox(height: 100),
+                    Center(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.receipt_long, color: Colors.white30, size: 64),
+                          SizedBox(height: 16),
+                          Text(
+                            'No orders yet',
+                            style: TextStyle(color: Colors.white60),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
+                    ),
+                  ],
                 )
               : ListView.builder(
                   padding: EdgeInsets.all(16),
@@ -1990,7 +2048,6 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -2033,7 +2090,6 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
             ),
           ),
           
-          // Content
           Padding(
             padding: EdgeInsets.all(16),
             child: Column(
@@ -2052,7 +2108,6 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
                 
                 SizedBox(height: 16),
                 
-                // Action Buttons
                 Row(
                   children: [
                     Expanded(
@@ -2121,7 +2176,7 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
               GestureDetector(
                 onTap: () {
                   Clipboard.setData(ClipboardData(text: copyValue));
-                  _showSuccessSnackbar('Copied to clipboard');
+                  _showSuccessSnackbar('Copied!');
                 },
                 child: Icon(
                   Icons.copy,
@@ -2153,7 +2208,6 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
 
   Widget _buildDepositsTab() {
     if (_deposits.isEmpty && !_isLoadingDeposits) {
-      // Load deposits on first view
       Future.delayed(Duration.zero, _loadDeposits);
     }
 
@@ -2189,18 +2243,23 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
             child: _isLoadingDeposits
                 ? Center(child: CircularProgressIndicator(color: accentBlue))
                 : _deposits.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.history, color: Colors.white30, size: 64),
-                            SizedBox(height: 16),
-                            Text(
-                              'No deposits yet',
-                              style: TextStyle(color: Colors.white60),
+                    ? ListView(
+                        children: [
+                          SizedBox(height: 50),
+                          Center(
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(Icons.history, color: Colors.white30, size: 64),
+                                SizedBox(height: 16),
+                                Text(
+                                  'No deposits yet',
+                                  style: TextStyle(color: Colors.white60),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
+                          ),
+                        ],
                       )
                     : ListView.builder(
                         padding: EdgeInsets.all(16),
@@ -2230,7 +2289,6 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
           Container(
             padding: EdgeInsets.all(16),
             decoration: BoxDecoration(
@@ -2273,7 +2331,6 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
             ),
           ),
           
-          // Content
           Padding(
             padding: EdgeInsets.all(16),
             child: Column(
@@ -2418,33 +2475,37 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
     required Color color,
     required VoidCallback onTap,
   }) {
-    return GestureDetector(
-      onTap: onTap,
-      child: Container(
-        padding: EdgeInsets.all(16),
-        decoration: BoxDecoration(
-          color: color.withOpacity(0.15),
-          borderRadius: BorderRadius.circular(12),
-          border: Border.all(
-            color: color.withOpacity(0.4),
-            width: 1.5,
-          ),
-        ),
-        child: Row(
-          children: [
-            Icon(icon, color: color, size: 24),
-            SizedBox(width: 16),
-            Text(
-              label,
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
+    return Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          padding: EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: color.withOpacity(0.15),
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: color.withOpacity(0.4),
+              width: 1.5,
             ),
-            Spacer(),
-            Icon(Icons.arrow_forward_ios, color: color.withOpacity(0.8), size: 16),
-          ],
+          ),
+          child: Row(
+            children: [
+              Icon(icon, color: color, size: 24),
+              SizedBox(width: 16),
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Spacer(),
+              Icon(Icons.arrow_forward_ios, color: color.withOpacity(0.8), size: 16),
+            ],
+          ),
         ),
       ),
     );
@@ -2491,6 +2552,37 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
             ),
           ],
         ),
+        actions: [
+          // Debug info button (optional, dapat dihapus di production)
+          IconButton(
+            icon: Icon(Icons.info_outline, color: Colors.white60),
+            onPressed: () {
+              showDialog(
+                context: context,
+                builder: (context) => AlertDialog(
+                  backgroundColor: cardDark,
+                  title: Text('Debug Info', style: TextStyle(color: Colors.white)),
+                  content: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Services: ${_services.length}', style: TextStyle(color: Colors.white70)),
+                      Text('Page: ${_currentPage + 1}/$_totalPages', style: TextStyle(color: Colors.white70)),
+                      Text('Loading: $_isLoadingServices', style: TextStyle(color: Colors.white70)),
+                      Text('Session: ${widget.sessionKey.substring(0, 8)}...', style: TextStyle(color: Colors.white70)),
+                    ],
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(context),
+                      child: Text('Close', style: TextStyle(color: accentBlue)),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Container(
         decoration: BoxDecoration(
@@ -2565,7 +2657,6 @@ class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMix
         setState(() {
           _currentTabIndex = index;
         });
-        // Load data when switching tabs
         if (index == 1 && _orders.isEmpty) {
           _loadOrders();
         } else if (index == 2 && _deposits.isEmpty) {
