@@ -1,0 +1,1494 @@
+import 'dart:convert';
+import 'dart:ui';
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+
+class NokosPage extends StatefulWidget {
+  final String username;
+  final String password;
+  final String sessionKey;
+  final String role;
+  final String expiredDate;
+
+  const NokosPage({
+    super.key,
+    required this.username,
+    required this.password,
+    required this.sessionKey,
+    required this.role,
+    required this.expiredDate,
+  });
+
+  @override
+  State<NokosPage> createState() => _NokosPageState();
+}
+
+class _NokosPageState extends State<NokosPage> with SingleTickerProviderStateMixin {
+  // Theme Colors
+  final Color primaryDark = const Color(0xFF000000);
+  final Color cardDark = const Color(0xFF1A1A1A);
+  final Color cardDarker = const Color(0xFF0D0D0D);
+  final Color accentRed = const Color(0xFFDC143C);
+  final Color accentBlue = const Color(0xFF2196F3);
+  final Color goldColor = const Color(0xFFFFD700);
+
+  // API Base URL
+  final String baseUrl = 'https://tapops.fanzhosting.my.id'; // Ganti dengan URL API Anda
+
+  // State Variables
+  int _currentTabIndex = 0;
+  
+  // Profile Data
+  Map<String, dynamic>? _profileData;
+  bool _isLoadingProfile = true;
+
+  // Services Data
+  List<Map<String, dynamic>> _services = [];
+  bool _isLoadingServices = false;
+  int _currentPage = 0;
+  int _totalPages = 1;
+  bool _hasNextPage = false;
+
+  // Selected Items
+  String? _selectedServiceCode;
+  String? _selectedServiceName;
+  List<Map<String, dynamic>> _countries = [];
+  Map<String, dynamic>? _selectedCountry;
+  List<Map<String, dynamic>> _prices = [];
+  Map<String, dynamic>? _selectedPrice;
+
+  // Orders & Deposits
+  List<Map<String, dynamic>> _orders = [];
+  List<Map<String, dynamic>> _deposits = [];
+
+  late AnimationController _fadeController;
+  late Animation<double> _fadeAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+
+    _fadeController = AnimationController(
+      duration: const Duration(milliseconds: 800),
+      vsync: this,
+    );
+
+    _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
+      CurvedAnimation(parent: _fadeController, curve: Curves.easeInOut),
+    );
+
+    _fadeController.forward();
+    _loadProfile();
+    _loadServices();
+  }
+
+  @override
+  void dispose() {
+    _fadeController.dispose();
+    super.dispose();
+  }
+
+  // API Calls
+  Future<void> _loadProfile() async {
+    setState(() => _isLoadingProfile = true);
+    
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/shop/profile?key=${widget.sessionKey}'),
+      );
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        setState(() {
+          _profileData = data['data'];
+          _isLoadingProfile = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading profile: $e');
+      setState(() => _isLoadingProfile = false);
+    }
+  }
+
+  Future<void> _loadServices({int page = 0}) async {
+    setState(() => _isLoadingServices = true);
+    
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/shop/services?key=${widget.sessionKey}&page=$page&limit=20'),
+      );
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        setState(() {
+          _services = List<Map<String, dynamic>>.from(data['data']['services']);
+          _currentPage = data['data']['pagination']['page'];
+          _totalPages = data['data']['pagination']['totalPages'];
+          _hasNextPage = data['data']['pagination']['hasNext'];
+          _isLoadingServices = false;
+        });
+      }
+    } catch (e) {
+      print('Error loading services: $e');
+      setState(() => _isLoadingServices = false);
+    }
+  }
+
+  Future<void> _loadCountries(String serviceCode) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/shop/countries?key=${widget.sessionKey}&serviceCode=$serviceCode'),
+      );
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        setState(() {
+          _countries = List<Map<String, dynamic>>.from(data['data']['countries']);
+          _selectedCountry = null;
+          _prices = [];
+          _selectedPrice = null;
+        });
+      }
+    } catch (e) {
+      print('Error loading countries: $e');
+    }
+  }
+
+  Future<void> _loadPrices(String serviceCode, int numberId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/shop/prices?key=${widget.sessionKey}&serviceCode=$serviceCode&numberId=$numberId'),
+      );
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        setState(() {
+          _prices = List<Map<String, dynamic>>.from(data['data']['prices']);
+          _selectedPrice = null;
+        });
+      } else {
+        _showErrorDialog(data['message'] ?? 'Failed to load prices');
+      }
+    } catch (e) {
+      print('Error loading prices: $e');
+    }
+  }
+
+  Future<void> _createOrder() async {
+    if (_selectedServiceCode == null || _selectedCountry == null || _selectedPrice == null) {
+      _showErrorDialog('Please select service, country, and price');
+      return;
+    }
+
+    _showLoadingDialog();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/shop/order'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'key': widget.sessionKey,
+          'serviceCode': _selectedServiceCode,
+          'numberId': _selectedCountry!['id'],
+          'providerId': _selectedPrice!['providerId'],
+        }),
+      );
+
+      Navigator.pop(context); // Close loading
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        _showOrderSuccessDialog(data['data']);
+        _loadProfile(); // Refresh balance
+        _resetSelection();
+      } else {
+        _showErrorDialog(data['message'] ?? 'Order failed');
+      }
+    } catch (e) {
+      Navigator.pop(context);
+      _showErrorDialog('Error: $e');
+    }
+  }
+
+  Future<void> _loadOrders() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/shop/orders?key=${widget.sessionKey}&limit=20'),
+      );
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        setState(() {
+          _orders = List<Map<String, dynamic>>.from(data['data']['orders']);
+        });
+      }
+    } catch (e) {
+      print('Error loading orders: $e');
+    }
+  }
+
+  Future<void> _loadDeposits() async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/shop/deposits?key=${widget.sessionKey}&limit=20'),
+      );
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        setState(() {
+          _deposits = List<Map<String, dynamic>>.from(data['data']['deposits']);
+        });
+      }
+    } catch (e) {
+      print('Error loading deposits: $e');
+    }
+  }
+
+  Future<void> _createDeposit(int amount) async {
+    _showLoadingDialog();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/shop/deposit/create'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'key': widget.sessionKey,
+          'amount': amount,
+        }),
+      );
+
+      Navigator.pop(context);
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        _showQRISDialog(data['data']);
+      } else {
+        _showErrorDialog(data['message'] ?? 'Failed to create deposit');
+      }
+    } catch (e) {
+      Navigator.pop(context);
+      _showErrorDialog('Error: $e');
+    }
+  }
+
+  Future<void> _checkOTP(String orderId) async {
+    try {
+      final response = await http.get(
+        Uri.parse('$baseUrl/shop/check-otp?key=${widget.sessionKey}&orderId=$orderId'),
+      );
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        if (data['data']['hasOtp']) {
+          _showOTPDialog(data['data']['otpCode']);
+        } else {
+          _showErrorDialog('OTP not received yet');
+        }
+      }
+    } catch (e) {
+      _showErrorDialog('Error: $e');
+    }
+  }
+
+  Future<void> _refundOrder(String orderId) async {
+    _showLoadingDialog();
+
+    try {
+      final response = await http.post(
+        Uri.parse('$baseUrl/shop/refund'),
+        headers: {'Content-Type': 'application/json'},
+        body: json.encode({
+          'key': widget.sessionKey,
+          'orderId': orderId,
+        }),
+      );
+
+      Navigator.pop(context);
+
+      final data = json.decode(response.body);
+      
+      if (data['valid'] && data['success']) {
+        _showSuccessDialog('Refund successful!');
+        _loadProfile();
+        _loadOrders();
+      } else {
+        _showErrorDialog(data['message'] ?? 'Refund failed');
+      }
+    } catch (e) {
+      Navigator.pop(context);
+      _showErrorDialog('Error: $e');
+    }
+  }
+
+  void _resetSelection() {
+    setState(() {
+      _selectedServiceCode = null;
+      _selectedServiceName = null;
+      _countries = [];
+      _selectedCountry = null;
+      _prices = [];
+      _selectedPrice = null;
+    });
+  }
+
+  // UI Helper Methods
+  void _showLoadingDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: CircularProgressIndicator(color: accentRed),
+      ),
+    );
+  }
+
+  void _showErrorDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => _buildDialog(
+        title: 'Error',
+        content: message,
+        icon: Icons.error_outline,
+        iconColor: accentRed,
+      ),
+    );
+  }
+
+  void _showSuccessDialog(String message) {
+    showDialog(
+      context: context,
+      builder: (context) => _buildDialog(
+        title: 'Success',
+        content: message,
+        icon: Icons.check_circle_outline,
+        iconColor: Colors.green,
+      ),
+    );
+  }
+
+  void _showOrderSuccessDialog(Map<String, dynamic> orderData) {
+    showDialog(
+      context: context,
+      builder: (context) => _buildDialog(
+        title: 'Order Successful',
+        content: 'Phone: ${orderData['phoneNumber']}\nPrice: ${orderData['displayPrice']}\nBalance: Rp ${orderData['balance'].toString()}',
+        icon: Icons.check_circle_outline,
+        iconColor: Colors.green,
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(context);
+              _checkOTP(orderData['orderId']);
+            },
+            child: Text('Check OTP', style: TextStyle(color: accentBlue)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close', style: TextStyle(color: Colors.white70)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showOTPDialog(String otpCode) {
+    showDialog(
+      context: context,
+      builder: (context) => _buildDialog(
+        title: 'OTP Code',
+        content: otpCode,
+        icon: Icons.message,
+        iconColor: accentBlue,
+      ),
+    );
+  }
+
+  void _showQRISDialog(Map<String, dynamic> qrisData) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('QRIS Payment', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Container(
+              padding: EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Image.memory(
+                base64Decode(qrisData['qrCode'].split(',')[1]),
+                width: 200,
+                height: 200,
+              ),
+            ),
+            SizedBox(height: 16),
+            Text(
+              'Amount: ${qrisData['displayTotal']}',
+              style: TextStyle(color: Colors.white, fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+            SizedBox(height: 8),
+            Text(
+              'Order ID: ${qrisData['orderId']}',
+              style: TextStyle(color: Colors.white70, fontSize: 12),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Close', style: TextStyle(color: Colors.white70)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showDepositDialog() {
+    final TextEditingController amountController = TextEditingController();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Deposit', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            TextField(
+              controller: amountController,
+              keyboardType: TextInputType.number,
+              style: TextStyle(color: Colors.white),
+              decoration: InputDecoration(
+                labelText: 'Amount (Min: Rp 10,000)',
+                labelStyle: TextStyle(color: Colors.white70),
+                enabledBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: Colors.white30),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderSide: BorderSide(color: accentBlue),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text('Cancel', style: TextStyle(color: Colors.white70)),
+          ),
+          TextButton(
+            onPressed: () {
+              final amount = int.tryParse(amountController.text);
+              if (amount != null && amount >= 10000) {
+                Navigator.pop(context);
+                _createDeposit(amount);
+              } else {
+                _showErrorDialog('Minimum deposit is Rp 10,000');
+              }
+            },
+            child: Text('Create', style: TextStyle(color: accentBlue)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialog({
+    required String title,
+    required String content,
+    required IconData icon,
+    required Color iconColor,
+    List<Widget>? actions,
+  }) {
+    return AlertDialog(
+      backgroundColor: cardDark,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: Row(
+        children: [
+          Icon(icon, color: iconColor, size: 28),
+          SizedBox(width: 12),
+          Text(title, style: TextStyle(color: Colors.white)),
+        ],
+      ),
+      content: Text(
+        content,
+        style: TextStyle(color: Colors.white70),
+      ),
+      actions: actions ?? [
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('OK', style: TextStyle(color: accentBlue)),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildGlassCard({required Widget child}) {
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(16),
+      child: BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10),
+        child: Container(
+          margin: const EdgeInsets.symmetric(vertical: 6, horizontal: 14),
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Colors.white.withOpacity(0.05),
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(
+              color: Colors.white.withOpacity(0.1),
+              width: 1.5,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildProfileHeader() {
+    if (_isLoadingProfile) {
+      return _buildGlassCard(
+        child: Center(child: CircularProgressIndicator(color: accentRed)),
+      );
+    }
+
+    return _buildGlassCard(
+      child: Column(
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: goldColor.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(Icons.account_balance_wallet, color: goldColor, size: 28),
+              ),
+              SizedBox(width: 16),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Balance',
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 12,
+                        letterSpacing: 0.5,
+                      ),
+                    ),
+                    SizedBox(height: 4),
+                    Text(
+                      _profileData?['displayBalance'] ?? 'Rp 0',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 24,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                onPressed: _showDepositDialog,
+                icon: Icon(Icons.add_circle, color: accentBlue, size: 32),
+              ),
+            ],
+          ),
+          SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _buildStatCard(
+                  'Orders',
+                  _profileData?['totalOrders']?.toString() ?? '0',
+                  Icons.shopping_bag,
+                ),
+              ),
+              SizedBox(width: 12),
+              Expanded(
+                child: _buildStatCard(
+                  'Deposits',
+                  _profileData?['totalDeposits']?.toString() ?? '0',
+                  Icons.payments,
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildStatCard(String label, String value, IconData icon) {
+    return Container(
+      padding: EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.05),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.white.withOpacity(0.1),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        children: [
+          Icon(icon, color: Colors.white60, size: 20),
+          SizedBox(height: 8),
+          Text(
+            value,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 20,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          SizedBox(height: 4),
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white60,
+              fontSize: 11,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildBuyTab() {
+    return SingleChildScrollView(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildProfileHeader(),
+          
+          // Service Selection
+          _buildGlassCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.apps, color: accentBlue, size: 20),
+                    SizedBox(width: 8),
+                    Text(
+                      'Select Service',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 12),
+                if (_isLoadingServices)
+                  Center(child: CircularProgressIndicator(color: accentRed))
+                else
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 8,
+                    children: _services.map((service) {
+                      final isSelected = _selectedServiceCode == service['code'];
+                      return GestureDetector(
+                        onTap: () {
+                          setState(() {
+                            _selectedServiceCode = service['code'];
+                            _selectedServiceName = service['name'];
+                          });
+                          _loadCountries(service['code']);
+                        },
+                        child: Container(
+                          padding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: isSelected
+                                ? accentBlue.withOpacity(0.3)
+                                : Colors.white.withOpacity(0.05),
+                            borderRadius: BorderRadius.circular(8),
+                            border: Border.all(
+                              color: isSelected
+                                  ? accentBlue
+                                  : Colors.white.withOpacity(0.1),
+                              width: 1.5,
+                            ),
+                          ),
+                          child: Text(
+                            service['name'],
+                            style: TextStyle(
+                              color: isSelected ? accentBlue : Colors.white70,
+                              fontSize: 12,
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                if (_hasNextPage)
+                  Padding(
+                    padding: EdgeInsets.only(top: 12),
+                    child: Center(
+                      child: TextButton(
+                        onPressed: () => _loadServices(page: _currentPage + 1),
+                        child: Text('Load More', style: TextStyle(color: accentBlue)),
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          // Country Selection
+          if (_countries.isNotEmpty)
+            _buildGlassCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.flag, color: accentRed, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Select Country',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 12),
+                  ...(_countries.map((country) {
+                    final isSelected = _selectedCountry?['id'] == country['id'];
+                    return GestureDetector(
+                      onTap: () {
+                        setState(() => _selectedCountry = country);
+                        _loadPrices(_selectedServiceCode!, country['id']);
+                      },
+                      child: Container(
+                        margin: EdgeInsets.only(bottom: 8),
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? accentRed.withOpacity(0.2)
+                              : Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isSelected
+                                ? accentRed
+                                : Colors.white.withOpacity(0.1),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(
+                                country['name'],
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                ),
+                              ),
+                            ),
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Stock: ${country['stock']}',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList()),
+                ],
+              ),
+            ),
+
+          // Price Selection
+          if (_prices.isNotEmpty)
+            _buildGlassCard(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Icon(Icons.attach_money, color: goldColor, size: 20),
+                      SizedBox(width: 8),
+                      Text(
+                        'Select Price',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: 12),
+                  ...(_prices.map((price) {
+                    final isSelected = _selectedPrice?['providerId'] == price['providerId'];
+                    return GestureDetector(
+                      onTap: () => setState(() => _selectedPrice = price),
+                      child: Container(
+                        margin: EdgeInsets.only(bottom: 8),
+                        padding: EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: isSelected
+                              ? goldColor.withOpacity(0.2)
+                              : Colors.white.withOpacity(0.05),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isSelected
+                                ? goldColor
+                                : Colors.white.withOpacity(0.1),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    price['serverName'],
+                                    style: TextStyle(
+                                      color: Colors.white,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  SizedBox(height: 4),
+                                  Text(
+                                    price['displayPrice'],
+                                    style: TextStyle(
+                                      color: goldColor,
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Container(
+                              padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                              decoration: BoxDecoration(
+                                color: Colors.white.withOpacity(0.1),
+                                borderRadius: BorderRadius.circular(6),
+                              ),
+                              child: Text(
+                                'Stock: ${price['stock']}',
+                                style: TextStyle(
+                                  color: Colors.white70,
+                                  fontSize: 11,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  }).toList()),
+                ],
+              ),
+            ),
+
+          // Order Button
+          if (_selectedPrice != null)
+            Container(
+              margin: EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              width: double.infinity,
+              child: ElevatedButton(
+                onPressed: _createOrder,
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accentBlue,
+                  padding: EdgeInsets.symmetric(vertical: 16),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                ),
+                child: Text(
+                  'Buy Now - ${_selectedPrice!['displayPrice']}',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildOrdersTab() {
+    if (_orders.isEmpty) {
+      if (_currentTabIndex == 1) {
+        _loadOrders();
+      }
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.shopping_bag_outlined, color: Colors.white30, size: 64),
+            SizedBox(height: 16),
+            Text(
+              'No orders yet',
+              style: TextStyle(color: Colors.white60, fontSize: 16),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      itemCount: _orders.length,
+      itemBuilder: (context, index) {
+        final order = _orders[index];
+        return _buildGlassCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: accentBlue.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.phone_android, color: accentBlue, size: 20),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          order['phoneNumber'],
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          order['country'],
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.end,
+                    children: [
+                      Text(
+                        order['displayPrice'],
+                        style: TextStyle(
+                          color: goldColor,
+                          fontSize: 14,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(height: 4),
+                      Container(
+                        padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: _getStatusColor(order['status']).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(6),
+                        ),
+                        child: Text(
+                          order['status'].toUpperCase(),
+                          style: TextStyle(
+                            color: _getStatusColor(order['status']),
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+              SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      'ID: ${order['orderId']}',
+                      style: TextStyle(color: Colors.white60, fontSize: 11),
+                    ),
+                  ),
+                  Text(
+                    order['timestamp'],
+                    style: TextStyle(color: Colors.white60, fontSize: 11),
+                  ),
+                ],
+              ),
+              if (order['status'] == 'pending') ...[
+                SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => _checkOTP(order['orderId']),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accentBlue.withOpacity(0.3),
+                          padding: EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: Text(
+                          'Check OTP',
+                          style: TextStyle(color: accentBlue, fontSize: 12),
+                        ),
+                      ),
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => _refundOrder(order['orderId']),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accentRed.withOpacity(0.3),
+                          padding: EdgeInsets.symmetric(vertical: 10),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                        child: Text(
+                          'Refund',
+                          style: TextStyle(color: accentRed, fontSize: 12),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildDepositsTab() {
+    if (_deposits.isEmpty) {
+      if (_currentTabIndex == 2) {
+        _loadDeposits();
+      }
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.payments_outlined, color: Colors.white30, size: 64),
+            SizedBox(height: 16),
+            Text(
+              'No deposits yet',
+              style: TextStyle(color: Colors.white60, fontSize: 16),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return ListView.builder(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      itemCount: _deposits.length,
+      itemBuilder: (context, index) {
+        final deposit = _deposits[index];
+        return _buildGlassCard(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: goldColor.withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.account_balance_wallet, color: goldColor, size: 20),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          deposit['displayAmount'],
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        SizedBox(height: 2),
+                        Text(
+                          deposit['orderId'],
+                          style: TextStyle(
+                            color: Colors.white70,
+                            fontSize: 11,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Container(
+                    padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: _getStatusColor(deposit['status']).withOpacity(0.2),
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: Text(
+                      deposit['status'].toUpperCase(),
+                      style: TextStyle(
+                        color: _getStatusColor(deposit['status']),
+                        fontSize: 10,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              SizedBox(height: 12),
+              Row(
+                children: [
+                  Icon(Icons.access_time, color: Colors.white60, size: 14),
+                  SizedBox(width: 6),
+                  Text(
+                    'Created: ${deposit['createdAt']}',
+                    style: TextStyle(color: Colors.white60, fontSize: 11),
+                  ),
+                ],
+              ),
+              if (deposit['completedAt'] != null) ...[
+                SizedBox(height: 4),
+                Row(
+                  children: [
+                    Icon(Icons.check_circle, color: Colors.green, size: 14),
+                    SizedBox(width: 6),
+                    Text(
+                      'Completed: ${deposit['completedAt']}',
+                      style: TextStyle(color: Colors.green, fontSize: 11),
+                    ),
+                  ],
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildProfileTab() {
+    return SingleChildScrollView(
+      padding: EdgeInsets.symmetric(vertical: 8),
+      child: Column(
+        children: [
+          _buildGlassCard(
+            child: Column(
+              children: [
+                CircleAvatar(
+                  radius: 40,
+                  backgroundColor: cardDarker,
+                  child: Icon(Icons.person, color: Colors.white60, size: 40),
+                ),
+                SizedBox(height: 16),
+                Text(
+                  widget.username,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: 4),
+                Text(
+                  widget.role.toUpperCase(),
+                  style: TextStyle(
+                    color: Colors.white60,
+                    fontSize: 12,
+                    letterSpacing: 1,
+                  ),
+                ),
+              ],
+            ),
+          ),
+          _buildProfileHeader(),
+          _buildGlassCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  'Quick Actions',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                SizedBox(height: 16),
+                _buildActionButton(
+                  icon: Icons.add_circle,
+                  label: 'Deposit',
+                  color: accentBlue,
+                  onTap: _showDepositDialog,
+                ),
+                SizedBox(height: 8),
+                _buildActionButton(
+                  icon: Icons.refresh,
+                  label: 'Refresh Balance',
+                  color: goldColor,
+                  onTap: _loadProfile,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildActionButton({
+    required IconData icon,
+    required String label,
+    required Color color,
+    required VoidCallback onTap,
+  }) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.15),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: color.withOpacity(0.4),
+            width: 1.5,
+          ),
+        ),
+        child: Row(
+          children: [
+            Icon(icon, color: color, size: 24),
+            SizedBox(width: 16),
+            Text(
+              label,
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Spacer(),
+            Icon(Icons.arrow_forward_ios, color: color.withOpacity(0.8), size: 16),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status.toLowerCase()) {
+      case 'completed':
+        return Colors.green;
+      case 'pending':
+        return Colors.orange;
+      case 'refunded':
+        return accentRed;
+      case 'cancelled':
+        return Colors.grey;
+      default:
+        return Colors.white;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: primaryDark,
+        elevation: 0,
+        leading: IconButton(
+          onPressed: () => Navigator.pop(context),
+          icon: Icon(Icons.arrow_back, color: Colors.white),
+        ),
+        title: Row(
+          children: [
+            Icon(Icons.phone_android, color: accentBlue, size: 24),
+            SizedBox(width: 12),
+            Text(
+              'Nokos Shop',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 20,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 0.5,
+              ),
+            ),
+          ],
+        ),
+      ),
+      body: Container(
+        decoration: BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topCenter,
+            end: Alignment.bottomCenter,
+            colors: [
+              Colors.black.withOpacity(0.9),
+              Colors.black.withOpacity(0.95),
+              Colors.black,
+            ],
+          ),
+        ),
+        child: FadeTransition(
+          opacity: _fadeAnimation,
+          child: _buildCurrentPage(),
+        ),
+      ),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: cardDark,
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.3),
+              blurRadius: 10,
+              offset: Offset(0, -2),
+            ),
+          ],
+        ),
+        child: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 8.0),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceAround,
+              children: [
+                _buildNavItem(
+                  icon: Icons.shopping_cart,
+                  label: 'Buy',
+                  index: 0,
+                ),
+                _buildNavItem(
+                  icon: Icons.receipt,
+                  label: 'Orders',
+                  index: 1,
+                ),
+                _buildNavItem(
+                  icon: Icons.history,
+                  label: 'Deposits',
+                  index: 2,
+                ),
+                _buildNavItem(
+                  icon: Icons.person,
+                  label: 'Profile',
+                  index: 3,
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildNavItem({
+    required IconData icon,
+    required String label,
+    required int index,
+  }) {
+    final isSelected = _currentTabIndex == index;
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _currentTabIndex = index;
+        });
+        // Load data when switching tabs
+        if (index == 1 && _orders.isEmpty) {
+          _loadOrders();
+        } else if (index == 2 && _deposits.isEmpty) {
+          _loadDeposits();
+        }
+      },
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? accentBlue.withOpacity(0.2) : Colors.transparent,
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(
+              icon,
+              color: isSelected ? accentBlue : Colors.white60,
+              size: 24,
+            ),
+            SizedBox(height: 4),
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? accentBlue : Colors.white60,
+                fontSize: 12,
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildCurrentPage() {
+    switch (_currentTabIndex) {
+      case 0:
+        return _buildBuyTab();
+      case 1:
+        return _buildOrdersTab();
+      case 2:
+        return _buildDepositsTab();
+      case 3:
+        return _buildProfileTab();
+      default:
+        return _buildBuyTab();
+    }
+  }
+}
