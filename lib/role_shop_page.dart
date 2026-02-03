@@ -8,7 +8,7 @@ import 'package:http/http.dart' as http;
 /// Sistem pembelian role membership menggunakan QRIS
 /// 
 /// API Endpoints yang tersedia:
-/// ✅ GET  /api/shop/catalog           - Daftar role yang bisa dibeli
+/// ✅ GET  /api/roles                  - Daftar role yang bisa dibeli
 /// ✅ POST /api/orders/create          - Buat order & QRIS
 /// ✅ POST /api/orders/verify          - Verifikasi pembayaran
 /// ✅ POST /api/orders/complete        - Lengkapi order dengan credentials
@@ -110,14 +110,14 @@ class _RoleShopPageState extends State<RoleShopPage> with SingleTickerProviderSt
   // 🌐 API IMPLEMENTATION
   // ==========================================
 
-  /// ✅ GET /api/shop/catalog
+  /// ✅ GET /api/roles
   /// Mendapatkan daftar role yang bisa dibeli
   Future<void> _loadRoleCatalog() async {
     setState(() => _isLoadingRoles = true);
     
     try {
       final response = await http.get(
-        Uri.parse('$baseUrl/api/shop/catalog'),
+        Uri.parse('$baseUrl/api/roles'),
       );
 
       final data = json.decode(response.body);
