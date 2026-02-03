@@ -3,8 +3,9 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart'; // 🆕 TAMBAHKAN INI
 
-/// 🛒 ROLE SHOP PAGE - Complete Implementation
+/// 🛒 ROLE SHOP PAGE - Complete Implementation with Group Link Button
 /// Sistem pembelian role membership menggunakan QRIS
 /// 
 /// API Endpoints yang tersedia:
@@ -233,7 +234,7 @@ class _RoleShopPageState extends State<RoleShopPage> with SingleTickerProviderSt
           _currentOrder = null;
         });
         
-        // Show success
+        // Show success dengan tombol group link
         _showSuccessDialog(data['data']);
       } else {
         _showErrorSnackbar(data['message'] ?? 'Failed to complete order');
@@ -290,7 +291,7 @@ class _RoleShopPageState extends State<RoleShopPage> with SingleTickerProviderSt
   }
 
   /// ✅ GET /api/orders
-  /// List semua orders (admin only)
+  /// List semua orders
   Future<void> _loadAllOrders() async {
     setState(() => _isLoadingOrders = true);
     
@@ -589,6 +590,10 @@ class _RoleShopPageState extends State<RoleShopPage> with SingleTickerProviderSt
     );
   }
 
+  // ==========================================
+  // 💬 DIALOGS & MODALS
+  // ==========================================
+
   /// 📱 PAYMENT DIALOG - Show QRIS
   void _showPaymentDialog() {
     if (_currentOrder == null) return;
@@ -872,66 +877,275 @@ class _RoleShopPageState extends State<RoleShopPage> with SingleTickerProviderSt
     );
   }
 
-  /// ✅ SUCCESS DIALOG - Order completed
-  void _showSuccessDialog(Map<String, dynamic> data) {
+  /// ✅ SUCCESS DIALOG - Order completed WITH GROUP LINK BUTTON
+  void _showSuccessDialog(Map<String, dynamic> orderData) {
+    final groupLink = orderData['group_update_link'] ?? '';
+    
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: cardDark,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(20),
-          side: BorderSide(color: accentGreen.withOpacity(0.5), width: 2),
-        ),
-        title: Column(
-          children: [
-            Icon(Icons.celebration, color: goldColor, size: 60),
-            SizedBox(height: 12),
-            Text(
-              'Purchase Successful!',
-              style: TextStyle(color: Colors.white),
-            ),
-          ],
-        ),
-        content: Container(
-          padding: EdgeInsets.all(16),
-          decoration: BoxDecoration(
-            color: cardDarker,
-            borderRadius: BorderRadius.circular(12),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              _buildInfoRow('Username', data['username'], goldColor),
-              Divider(color: Colors.white24),
-              _buildInfoRow('Role', data['role'], accentBlue),
-              _buildInfoRow('Expired', data['expired_date'], Colors.white70),
-              SizedBox(height: 16),
-              Text(
-                'Akun Anda telah dibuat dan aktif!',
-                style: TextStyle(
-                  color: accentGreen,
-                  fontSize: 14,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
+      builder: (BuildContext context) {
+        return Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  cardDark,
+                  cardDarker,
+                ],
               ),
-            ],
-          ),
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () {
-              Navigator.of(context).pop();
-              // Reload catalog
-              _loadRoleCatalog();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: accentGreen,
-              foregroundColor: Colors.white,
-              padding: EdgeInsets.symmetric(horizontal: 32, vertical: 12),
+              borderRadius: BorderRadius.circular(24),
+              border: Border.all(
+                color: accentGreen.withOpacity(0.5),
+                width: 2,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: accentGreen.withOpacity(0.3),
+                  blurRadius: 20,
+                  spreadRadius: 5,
+                ),
+              ],
             ),
-            child: Text('OK'),
+            child: Padding(
+              padding: const EdgeInsets.all(24.0),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Success Icon
+                  Container(
+                    width: 80,
+                    height: 80,
+                    decoration: BoxDecoration(
+                      color: accentGreen.withOpacity(0.2),
+                      shape: BoxShape.circle,
+                      border: Border.all(
+                        color: accentGreen,
+                        width: 3,
+                      ),
+                    ),
+                    child: Icon(
+                      Icons.check_circle,
+                      color: accentGreen,
+                      size: 50,
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 24),
+                  
+                  // Title
+                  Text(
+                    '🎉 Order Berhasil!',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  
+                  const SizedBox(height: 8),
+                  
+                  // Subtitle
+                  Text(
+                    'Akun ${orderData['role_name']} sudah aktif',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 16,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  
+                  const SizedBox(height: 24),
+                  
+                  // Account Details Container
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: goldColor.withOpacity(0.3),
+                        width: 1,
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          'Detail Akun',
+                          style: TextStyle(
+                            color: goldColor,
+                            fontSize: 14,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 0.5,
+                          ),
+                        ),
+                        const SizedBox(height: 12),
+                        _buildSuccessInfoRow('Username', orderData['username']),
+                        _buildSuccessInfoRow('Role', orderData['role_name']),
+                        _buildSuccessInfoRow('Expired', orderData['expired_date']),
+                      ],
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 16),
+                  
+                  // Benefits List
+                  if (orderData['benefits'] != null)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withOpacity(0.3),
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(
+                          color: accentBlue.withOpacity(0.3),
+                          width: 1,
+                        ),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '✨ Benefits',
+                            style: TextStyle(
+                              color: accentBlue,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                              letterSpacing: 0.5,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          ...List<String>.from(orderData['benefits']).map(
+                            (benefit) => Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.check_circle_outline,
+                                    color: accentGreen,
+                                    size: 16,
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: Text(
+                                      benefit,
+                                      style: TextStyle(
+                                        color: Colors.white70,
+                                        fontSize: 13,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  
+                  const SizedBox(height: 24),
+                  
+                  // 🆕 TOMBOL JOIN GROUP (jika ada group link)
+                  if (groupLink.isNotEmpty)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(bottom: 12),
+                      child: ElevatedButton.icon(
+                        onPressed: () async {
+                          final uri = Uri.parse(groupLink);
+                          if (await canLaunchUrl(uri)) {
+                            await launchUrl(
+                              uri,
+                              mode: LaunchMode.externalApplication,
+                            );
+                          } else {
+                            _showErrorSnackbar('Tidak bisa membuka link group');
+                          }
+                        },
+                        icon: Icon(Icons.group, size: 20),
+                        label: Text(
+                          'Join Group Update',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: accentBlue,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          elevation: 5,
+                          shadowColor: accentBlue.withOpacity(0.5),
+                        ),
+                      ),
+                    ),
+                  
+                  // Close Button
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: () {
+                        Navigator.of(context).pop();
+                        // Reload data
+                        _loadAllOrders();
+                      },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: accentGreen,
+                        foregroundColor: Colors.white,
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        elevation: 5,
+                        shadowColor: accentGreen.withOpacity(0.5),
+                      ),
+                      child: Text(
+                        'OK, Mengerti',
+                        style: TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildSuccessInfoRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(
+            label,
+            style: TextStyle(
+              color: Colors.white60,
+              fontSize: 14,
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: 14,
+              fontWeight: FontWeight.bold,
+            ),
           ),
         ],
       ),
