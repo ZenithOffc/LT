@@ -812,7 +812,7 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
           carouselController: _carouselController,
           itemCount: _roles.length,
           options: CarouselOptions(
-            height: 450,
+            height: 520, // ✅ Increased height for all benefits
             enlargeCenterPage: true,
             enableInfiniteScroll: false,
             viewportFraction: 0.85,
@@ -851,7 +851,7 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
     );
   }
 
-  // ✅ IMPROVED: Role Card with Full Description from ROLE_CATALOG
+  // ✅ IMPROVED: Role Card with Full Description & Benefits from ROLE_CATALOG
   Widget _buildRoleCard(Map<String, dynamic> role) {
     final isCurrentRole = widget.role.toLowerCase() == role['role_id'].toLowerCase();
     
@@ -865,9 +865,14 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
       }
     }
     
-    // ✅ Get full description from role data
+    // ✅ Get full description and benefits from role data
     final description = role['description'] ?? 'No description available';
     final features = List<String>.from(role['features'] ?? []);
+    final durationDays = role['duration_days'] ?? 0;
+    
+    // ✅ Check if permanent (36500 days or more = ~100 years)
+    final isPermanent = durationDays >= 36500;
+    final durationText = isPermanent ? 'Permanent' : '$durationDays days';
     
     return Container(
       width: double.infinity,
@@ -893,7 +898,7 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header
+          // Header with Role Name and Icon
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
@@ -936,10 +941,17 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
                   ],
                 ),
               ),
-              Icon(
-                Icons.workspace_premium,
-                color: getRoleColor(),
-                size: 40,
+              Container(
+                padding: EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: getRoleColor().withOpacity(0.15),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(
+                  Icons.workspace_premium,
+                  color: getRoleColor(),
+                  size: 36,
+                ),
               ),
             ],
           ),
@@ -947,108 +959,182 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
           SizedBox(height: 16),
           
           // ✅ Description from ROLE_CATALOG
-          Text(
-            description,
-            style: TextStyle(
-              color: Colors.white70,
-              fontSize: 14,
-              height: 1.5,
+          Container(
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: cardDarker.withOpacity(0.5),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: getRoleColor().withOpacity(0.2),
+              ),
             ),
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
+            child: Text(
+              description,
+              style: TextStyle(
+                color: Colors.white70,
+                fontSize: 13,
+                height: 1.6,
+              ),
+            ),
           ),
           
           SizedBox(height: 16),
           
-          // ✅ Features from ROLE_CATALOG
+          // ✅ ALL Benefits/Features from ROLE_CATALOG (Scrollable)
           if (features.isNotEmpty) ...[
-            Text(
-              'Features:',
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            SizedBox(height: 8),
-            ...features.take(3).map((feature) => Padding(
-              padding: EdgeInsets.only(bottom: 6),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    Icons.check_circle_outline,
-                    color: getRoleColor(),
-                    size: 16,
-                  ),
-                  SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      feature,
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            )),
-            if (features.length > 3)
-              Padding(
-                padding: EdgeInsets.only(left: 24),
-                child: Text(
-                  '+${features.length - 3} more features',
+            Row(
+              children: [
+                Icon(Icons.stars, color: getRoleColor(), size: 18),
+                SizedBox(width: 8),
+                Text(
+                  'Benefits & Features',
                   style: TextStyle(
-                    color: getRoleColor(),
-                    fontSize: 12,
-                    fontStyle: FontStyle.italic,
+                    color: Colors.white,
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
+              ],
+            ),
+            SizedBox(height: 12),
+            
+            // ✅ Show ALL features in a container with max height
+            Container(
+              constraints: BoxConstraints(maxHeight: 150),
+              child: SingleChildScrollView(
+                child: Column(
+                  children: features.map((feature) => Padding(
+                    padding: EdgeInsets.only(bottom: 8),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Padding(
+                          padding: EdgeInsets.only(top: 2),
+                          child: Icon(
+                            Icons.check_circle,
+                            color: getRoleColor(),
+                            size: 16,
+                          ),
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            feature,
+                            style: TextStyle(
+                              color: Colors.white70,
+                              fontSize: 13,
+                              height: 1.4,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  )).toList(),
+                ),
               ),
+            ),
+            
             SizedBox(height: 16),
           ],
           
-          // Price & Duration
+          // Price & Duration Info Box
           Container(
-            padding: EdgeInsets.all(12),
+            padding: EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: cardDarker,
+              gradient: LinearGradient(
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+                colors: [
+                  cardDarker,
+                  cardDarker.withOpacity(0.8),
+                ],
+              ),
               borderRadius: BorderRadius.circular(12),
+              border: Border.all(
+                color: getRoleColor().withOpacity(0.3),
+              ),
             ),
             child: Column(
               children: [
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Price',
-                      style: TextStyle(color: Colors.white60, fontSize: 13),
+                    Row(
+                      children: [
+                        Icon(Icons.payments, color: Colors.white60, size: 16),
+                        SizedBox(width: 8),
+                        Text(
+                          'Price',
+                          style: TextStyle(
+                            color: Colors.white60,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
                     Text(
                       'Rp ${_formatNumber(role['price'])}',
                       style: TextStyle(
                         color: getRoleColor(),
-                        fontSize: 16,
+                        fontSize: 18,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                   ],
                 ),
-                SizedBox(height: 8),
+                
+                SizedBox(height: 10),
+                Divider(color: Colors.white10, height: 1),
+                SizedBox(height: 10),
+                
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    Text(
-                      'Duration',
-                      style: TextStyle(color: Colors.white60, fontSize: 13),
+                    Row(
+                      children: [
+                        Icon(
+                          isPermanent ? Icons.all_inclusive : Icons.schedule,
+                          color: Colors.white60,
+                          size: 16,
+                        ),
+                        SizedBox(width: 8),
+                        Text(
+                          'Duration',
+                          style: TextStyle(
+                            color: Colors.white60,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
-                    Text(
-                      '${role['duration_days']} days',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 14,
-                        fontWeight: FontWeight.w600,
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                      decoration: BoxDecoration(
+                        color: isPermanent 
+                          ? goldColor.withOpacity(0.2)
+                          : getRoleColor().withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(6),
+                      ),
+                      child: Row(
+                        children: [
+                          if (isPermanent)
+                            Icon(
+                              Icons.star,
+                              color: goldColor,
+                              size: 14,
+                            ),
+                          if (isPermanent) SizedBox(width: 4),
+                          Text(
+                            durationText,
+                            style: TextStyle(
+                              color: isPermanent ? goldColor : Colors.white,
+                              fontSize: 14,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
                       ),
                     ),
                   ],
@@ -1057,7 +1143,7 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
             ),
           ),
           
-          Spacer(),
+          SizedBox(height: 16),
           
           // Purchase Button
           SizedBox(
@@ -1067,19 +1153,31 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
               style: ElevatedButton.styleFrom(
                 backgroundColor: getRoleColor(),
                 foregroundColor: Colors.white,
-                disabledBackgroundColor: Colors.grey,
+                disabledBackgroundColor: Colors.grey.shade800,
+                disabledForegroundColor: Colors.white38,
                 padding: EdgeInsets.symmetric(vertical: 14),
                 shape: RoundedRectangleBorder(
                   borderRadius: BorderRadius.circular(12),
                 ),
                 elevation: 0,
               ),
-              child: Text(
-                isCurrentRole ? 'Current Role' : 'Purchase Now',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.bold,
-                ),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    isCurrentRole ? Icons.check_circle : Icons.shopping_cart,
+                    size: 20,
+                  ),
+                  SizedBox(width: 8),
+                  Text(
+                    isCurrentRole ? 'Current Role' : 'Purchase Now',
+                    style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
               ),
             ),
           ),
