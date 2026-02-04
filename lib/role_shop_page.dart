@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
+import 'package:carousel_slider/carousel_slider.dart'; // ✅ ADD THIS PACKAGE
 
 /// 🛒 ROLE SHOP WITH BALANCE SYSTEM
 /// Sistem pembelian role menggunakan saldo user
@@ -71,6 +72,9 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
   List<Map<String, dynamic>> _roles = [];
   bool _isLoadingRoles = true;
   
+  // ✅ MIN TOPUP from backend
+  int _minTopup = 1000;
+  
   // Transactions
   List<Map<String, dynamic>> _transactions = [];
   bool _isLoadingTransactions = false;
@@ -88,6 +92,10 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
   // Animation
   late AnimationController _fadeController;
   late Animation<double> _fadeAnimation;
+  
+  // ✅ Carousel controller
+  final CarouselSliderController _carouselController = CarouselSliderController();
+  int _currentCarouselIndex = 0;
 
   @override
   void initState() {
@@ -174,9 +182,11 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
       if (data['success'] == true) {
         setState(() {
           _balance = data['data']['balance'] ?? 0;
+          // ✅ GET min_topup from API response
+          _minTopup = data['data']['min_topup'] ?? 1000;
           _isLoadingBalance = false;
         });
-        debugPrint('✅ Balance loaded: $_balance');
+        debugPrint('✅ Balance loaded: $_balance, min_topup: $_minTopup');
       } else {
         setState(() => _isLoadingBalance = false);
         _showErrorSnackbar(data['message'] ?? 'Failed to load balance');
@@ -216,55 +226,71 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
     }
   }
 
-  /// ✅ GET /api/transactions/:username
+  /// ✅ GET /api/transactions/:username - FIX LOADING ISSUE
   Future<void> _loadTransactions() async {
+    if (_isLoadingTransactions) return; // Prevent duplicate loading
+    
     setState(() => _isLoadingTransactions = true);
     
     try {
       final response = await http.get(
         Uri.parse('$baseUrl/api/transactions/${widget.username}?limit=50'),
-      );
+      ).timeout(Duration(seconds: 10)); // Add timeout
 
       final data = json.decode(response.body);
       
       if (data['success'] == true) {
         setState(() {
-          _transactions = List<Map<String, dynamic>>.from(data['data']);
+          _transactions = List<Map<String, dynamic>>.from(data['data'] ?? []);
           _isLoadingTransactions = false;
         });
         debugPrint('✅ Transactions loaded: ${_transactions.length}');
       } else {
-        setState(() => _isLoadingTransactions = false);
+        setState(() {
+          _transactions = [];
+          _isLoadingTransactions = false;
+        });
       }
     } catch (e) {
       debugPrint('❌ Error loading transactions: $e');
-      setState(() => _isLoadingTransactions = false);
+      setState(() {
+        _transactions = [];
+        _isLoadingTransactions = false;
+      });
     }
   }
 
-  /// ✅ GET /api/deposits/:username
+  /// ✅ GET /api/deposits/:username - FIX LOADING ISSUE
   Future<void> _loadDeposits() async {
+    if (_isLoadingDeposits) return; // Prevent duplicate loading
+    
     setState(() => _isLoadingDeposits = true);
     
     try {
       final response = await http.get(
         Uri.parse('$baseUrl/api/deposits/${widget.username}'),
-      );
+      ).timeout(Duration(seconds: 10)); // Add timeout
 
       final data = json.decode(response.body);
       
       if (data['success'] == true) {
         setState(() {
-          _deposits = List<Map<String, dynamic>>.from(data['data']);
+          _deposits = List<Map<String, dynamic>>.from(data['data'] ?? []);
           _isLoadingDeposits = false;
         });
         debugPrint('✅ Deposits loaded: ${_deposits.length}');
       } else {
-        setState(() => _isLoadingDeposits = false);
+        setState(() {
+          _deposits = [];
+          _isLoadingDeposits = false;
+        });
       }
     } catch (e) {
       debugPrint('❌ Error loading deposits: $e');
-      setState(() => _isLoadingDeposits = false);
+      setState(() {
+        _deposits = [];
+        _isLoadingDeposits = false;
+      });
     }
   }
 
@@ -290,13 +316,14 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
           _isCreatingTopUp = false;
         });
         
-        debugPrint('✅ Top up created: ${data['data']['order_id']}');
+        debugPrint('✅ Top up created: ${data['data']}');
         
-        // Start auto check
+        // Show QR dialog
+        _showQRDialog();
+        
+        // Start auto-check timer (every 3 seconds)
         _startAutoCheckPayment();
         
-        // Show QRIS dialog
-        _showQRISDialog();
       } else {
         setState(() => _isCreatingTopUp = false);
         _showErrorSnackbar(data['message'] ?? 'Failed to create top up');
@@ -309,7 +336,9 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
   }
 
   /// ✅ POST /api/balance/topup/verify
-  Future<void> _verifyTopUp(String orderId) async {
+  Future<void> _verifyPayment() async {
+    if (_currentTopUp == null) return;
+    
     setState(() => _isVerifyingPayment = true);
     
     try {
@@ -317,7 +346,7 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
         Uri.parse('$baseUrl/api/balance/topup/verify'),
         headers: {'Content-Type': 'application/json'},
         body: json.encode({
-          'order_id': orderId,
+          'order_id': _currentTopUp!['order_id'],
           'username': widget.username,
         }),
       );
@@ -327,45 +356,159 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
       setState(() => _isVerifyingPayment = false);
       
       if (data['success'] == true) {
-        if (data['data']['status'] == 'completed') {
-          // Payment verified!
-          _stopAutoCheckPayment();
-          
-          setState(() {
-            _currentTopUp = null;
-          });
-          
-          // Close dialog
-          Navigator.of(context).pop();
-          
-          // Reload balance
-          await _loadBalance();
-          
-          // Show success
-          _showSuccessDialog(data['data']);
-        } else {
-          _showInfoSnackbar('Payment not detected yet');
-        }
+        debugPrint('✅ Payment verified!');
+        
+        // Stop auto-check
+        _autoCheckTimer?.cancel();
+        
+        // Close QR dialog
+        Navigator.pop(context);
+        
+        // Show success
+        _showSuccessSnackbar('Top up successful! +Rp ${_formatNumber(_currentTopUp!['amount'])}');
+        
+        // Reload balance
+        await _loadBalance();
+        
+        // Clear current top up
+        setState(() => _currentTopUp = null);
+        
       } else {
-        _showErrorSnackbar(data['message'] ?? 'Payment verification failed');
+        if (data['message']?.contains('pending') == true) {
+          // Still pending, auto-check will continue
+          debugPrint('⏳ Payment still pending...');
+        } else {
+          _showErrorSnackbar(data['message'] ?? 'Payment verification failed');
+        }
       }
     } catch (e) {
       debugPrint('❌ Error verifying payment: $e');
       setState(() => _isVerifyingPayment = false);
-      _showErrorSnackbar('Network error: $e');
     }
+  }
+
+  /// ✅ Auto-check payment status
+  void _startAutoCheckPayment() {
+    _autoCheckTimer?.cancel();
+    _autoCheckTimer = Timer.periodic(Duration(seconds: 3), (timer) {
+      if (_currentTopUp != null) {
+        _verifyPayment();
+      } else {
+        timer.cancel();
+      }
+    });
   }
 
   /// ✅ POST /api/roles/purchase
   Future<void> _purchaseRole(Map<String, dynamic> role) async {
-    // Show confirmation
-    final confirmed = await showDialog<bool>(
+    // Confirm dialog
+    final confirm = await showDialog<bool>(
       context: context,
-      builder: (context) => _buildConfirmDialog(role),
+      builder: (context) => AlertDialog(
+        backgroundColor: cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Confirm Purchase', style: TextStyle(color: Colors.white)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Purchase ${role['role_name']} role?',
+              style: TextStyle(color: Colors.white70),
+            ),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: cardDarker,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                children: [
+                  _buildInfoRow('Price', 'Rp ${_formatNumber(role['price'])}', accentRed),
+                  _buildInfoRow('Duration', '${role['duration_days']} days', Colors.white),
+                  _buildInfoRow('Your Balance', 'Rp ${_formatNumber(_balance)}', accentGreen),
+                  Divider(color: Colors.white24, height: 20),
+                  _buildInfoRow(
+                    'After Purchase',
+                    'Rp ${_formatNumber(_balance - role['price'])}',
+                    _balance >= role['price'] ? accentGreen : accentRed,
+                  ),
+                ],
+              ),
+            ),
+            if (_balance < role['price']) ...[
+              SizedBox(height: 12),
+              Container(
+                padding: EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: accentRed.withOpacity(0.2),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.warning, color: accentRed, size: 20),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Insufficient balance!',
+                        style: TextStyle(color: accentRed, fontSize: 12),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('Cancel', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            onPressed: _balance >= role['price'] 
+              ? () => Navigator.pop(context, true)
+              : null,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: goldColor,
+              foregroundColor: Colors.black,
+              disabledBackgroundColor: Colors.grey,
+            ),
+            child: Text('Purchase'),
+          ),
+        ],
+      ),
     );
-    
-    if (confirmed != true) return;
-    
+
+    if (confirm != true) return;
+
+    // Show loading
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) => Center(
+        child: Container(
+          padding: EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: cardDark,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              CircularProgressIndicator(color: goldColor),
+              SizedBox(height: 16),
+              Text(
+                'Processing purchase...',
+                style: TextStyle(color: Colors.white),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+
     try {
       final response = await http.post(
         Uri.parse('$baseUrl/api/roles/purchase'),
@@ -378,16 +521,24 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
 
       final data = json.decode(response.body);
       
+      // Close loading
+      Navigator.pop(context);
+      
       if (data['success'] == true) {
+        debugPrint('✅ Role purchased successfully!');
+        
         // Reload balance
         await _loadBalance();
         
-        // Show success with group link
+        // Show success dialog
         _showPurchaseSuccessDialog(data['data']);
+        
       } else {
         _showErrorSnackbar(data['message'] ?? 'Purchase failed');
       }
     } catch (e) {
+      // Close loading
+      Navigator.pop(context);
       debugPrint('❌ Error purchasing role: $e');
       _showErrorSnackbar('Network error: $e');
     }
@@ -395,18 +546,44 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
 
   /// ✅ DELETE /api/deposits/:order_id
   Future<void> _cancelDeposit(String orderId) async {
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        backgroundColor: cardDark,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Cancel Deposit?', style: TextStyle(color: Colors.white)),
+        content: Text(
+          'Are you sure you want to cancel this deposit order?',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text('No', style: TextStyle(color: Colors.white60)),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: accentRed),
+            child: Text('Yes, Cancel'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
     try {
       final response = await http.delete(
-        Uri.parse('$baseUrl/api/deposits/$orderId?username=${widget.username}'),
+        Uri.parse('$baseUrl/api/deposits/$orderId'),
       );
 
       final data = json.decode(response.body);
       
       if (data['success'] == true) {
         _showSuccessSnackbar('Deposit cancelled');
-        _loadDeposits();
+        await _loadDeposits();
       } else {
-        _showErrorSnackbar(data['message'] ?? 'Failed to cancel');
+        _showErrorSnackbar(data['message'] ?? 'Failed to cancel deposit');
       }
     } catch (e) {
       debugPrint('❌ Error cancelling deposit: $e');
@@ -415,490 +592,496 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
   }
 
   // ==========================================
-  // ⏰ AUTO CHECK PAYMENT
-  // ==========================================
-
-  void _startAutoCheckPayment() {
-    _autoCheckTimer?.cancel();
-    
-    _autoCheckTimer = Timer.periodic(const Duration(seconds: 5), (timer) {
-      if (_currentTopUp != null) {
-        _verifyTopUp(_currentTopUp!['order_id']);
-      } else {
-        timer.cancel();
-      }
-    });
-  }
-
-  void _stopAutoCheckPayment() {
-    _autoCheckTimer?.cancel();
-  }
-
-  // ==========================================
-  // 🎨 UI BUILDERS - TABS
+  // 🎨 UI COMPONENTS
   // ==========================================
 
   Widget _buildCurrentPage() {
     switch (_currentTabIndex) {
       case 0:
-        return _buildShopTab();
+        return _buildShopPage();
       case 1:
-        return _buildTransactionsTab();
+        return _buildHistoryPage();
       case 2:
-        return _buildDepositsTab();
+        return _buildDepositsPage();
       default:
-        return _buildShopTab();
+        return _buildShopPage();
     }
   }
 
   // ==========================================
-  // 🛍️ SHOP TAB
+  // 🛍️ SHOP PAGE
   // ==========================================
 
-  Widget _buildShopTab() {
+  Widget _buildShopPage() {
     return RefreshIndicator(
       onRefresh: _refreshAll,
       color: goldColor,
       backgroundColor: cardDark,
-      strokeWidth: 3.0,
-      displacement: 40.0, // Distance to trigger refresh
-      // ✨ Custom notification when refreshing
-      notificationPredicate: (ScrollNotification notification) {
-        return notification.depth == 0;
-      },
-      child: CustomScrollView(
-        physics: const AlwaysScrollableScrollPhysics(
-          parent: BouncingScrollPhysics(), // ✨ iOS-style bounce
-        ),
-        slivers: [
-          // ✨ PULL TO REFRESH HINT
-          SliverToBoxAdapter(
-            child: Container(
-              padding: const EdgeInsets.only(top: 8),
-              child: Center(
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.arrow_downward_rounded,
-                      size: 14,
-                      color: Colors.white24,
-                    ),
-                    SizedBox(width: 6),
-                    Text(
-                      'Pull to refresh',
-                      style: TextStyle(
-                        color: Colors.white24,
-                        fontSize: 11,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
-          
-          // Balance Card
-          SliverToBoxAdapter(
-            child: _buildBalanceCard(),
-          ),
-          
-          // Top Up Button
-          SliverToBoxAdapter(
-            child: _buildTopUpButton(),
-          ),
-          
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(20, 24, 20, 12),
-              child: Text(
-                '✨ Available Roles',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                  letterSpacing: 0.5,
-                ),
-              ),
-            ),
-          ),
-          
-          // Role Cards
-          if (_isLoadingRoles)
-            SliverToBoxAdapter(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: CircularProgressIndicator(color: goldColor),
-                ),
-              ),
-            )
-          else if (_roles.isEmpty)
-            SliverToBoxAdapter(
-              child: Center(
-                child: Padding(
-                  padding: const EdgeInsets.all(32),
-                  child: Text(
-                    'No roles available',
-                    style: TextStyle(color: Colors.white60),
-                  ),
-                ),
-              ),
-            )
-          else
-            SliverList(
-              delegate: SliverChildBuilderDelegate(
-                (context, index) => _buildRoleCard(_roles[index]),
-                childCount: _roles.length,
-              ),
-            ),
-          
-          SliverToBoxAdapter(child: SizedBox(height: 20)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildBalanceCard() {
-    return Container(
-      margin: const EdgeInsets.all(16),
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        gradient: LinearGradient(
-          colors: [goldColor.withOpacity(0.3), goldColor.withOpacity(0.1)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: goldColor.withOpacity(0.5), width: 1.5),
-        boxShadow: [
-          BoxShadow(
-            color: goldColor.withOpacity(0.3),
-            blurRadius: 20,
-            offset: Offset(0, 8),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
+      child: SingleChildScrollView(
+        physics: AlwaysScrollableScrollPhysics(),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.account_balance_wallet, color: goldColor, size: 28),
-              SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Your Balance',
-                      style: TextStyle(
-                        color: Colors.white70,
-                        fontSize: 14,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    if (_isLoadingBalance)
-                      Padding(
-                        padding: const EdgeInsets.only(top: 4),
-                        child: Text(
-                          'Refreshing...',
-                          style: TextStyle(
-                            color: goldColor.withOpacity(0.7),
-                            fontSize: 11,
-                            fontStyle: FontStyle.italic,
-                          ),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
-              // ✨ ENHANCED REFRESH BUTTON
-              Container(
-                decoration: BoxDecoration(
-                  color: _isLoadingBalance 
-                      ? goldColor.withOpacity(0.1) 
-                      : goldColor.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: goldColor.withOpacity(0.3),
-                    width: 1,
-                  ),
-                ),
-                child: Material(
-                  color: Colors.transparent,
-                  child: InkWell(
-                    borderRadius: BorderRadius.circular(12),
-                    onTap: _isLoadingBalance ? null : _handleRefreshBalance,
-                    child: Padding(
-                      padding: const EdgeInsets.all(10),
-                      child: _isLoadingBalance
-                          ? SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                color: goldColor,
-                                strokeWidth: 2.5,
-                              ),
-                            )
-                          : Icon(
-                              Icons.refresh_rounded,
-                              color: goldColor,
-                              size: 24,
-                            ),
-                    ),
-                  ),
-                ),
-              ),
+              // ✅ IMPROVED BALANCE CARD - Modern & Simple (No Glow Effect)
+              _buildModernBalanceCard(),
+              
+              SizedBox(height: 24),
+              
+              // ✅ CAROUSEL ROLE CARDS
+              _buildRoleCarousel(),
             ],
           ),
-          SizedBox(height: 16),
-          
-          // ✨ BALANCE AMOUNT WITH ANIMATION
-          AnimatedSwitcher(
-            duration: const Duration(milliseconds: 300),
-            transitionBuilder: (Widget child, Animation<double> animation) {
-              return FadeTransition(
-                opacity: animation,
-                child: SlideTransition(
-                  position: Tween<Offset>(
-                    begin: const Offset(0, 0.2),
-                    end: Offset.zero,
-                  ).animate(animation),
-                  child: child,
-                ),
-              );
-            },
-            child: Text(
-              'Rp ${_formatNumber(_balance)}',
-              key: ValueKey<int>(_balance), // Key untuk trigger animation
-              style: TextStyle(
-                color: Colors.white,
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-            ),
-          ),
-          
-          // ✨ LAST UPDATED INFO
-          if (!_isLoadingBalance)
-            Padding(
-              padding: const EdgeInsets.only(top: 8),
-              child: Row(
-                children: [
-                  Icon(
-                    Icons.access_time,
-                    size: 12,
-                    color: Colors.white38,
-                  ),
-                  SizedBox(width: 4),
-                  Text(
-                    'Tap refresh to update',
-                    style: TextStyle(
-                      color: Colors.white38,
-                      fontSize: 11,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-        ],
+        ),
       ),
     );
   }
 
-  // ✨ ENHANCED REFRESH HANDLER
-  Future<void> _handleRefreshBalance() async {
-    // Haptic feedback (if available)
-    HapticFeedback.lightImpact();
-    
-    final previousBalance = _balance;
-    
-    await _loadBalance();
-    
-    // Show feedback based on balance change
-    if (_balance > previousBalance) {
-      _showSuccessSnackbar('Balance increased! +Rp ${_formatNumber(_balance - previousBalance)}');
-    } else if (_balance < previousBalance) {
-      _showInfoSnackbar('Balance updated: Rp ${_formatNumber(_balance)}');
-    } else {
-      _showInfoSnackbar('Balance is up to date');
-    }
-  }
-
-  Widget _buildTopUpButton() {
-    return GestureDetector(
-      onTap: _showTopUpDialog,
-      child: Container(
-        margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-        padding: const EdgeInsets.all(20),
-        decoration: BoxDecoration(
-          color: accentBlue.withOpacity(0.2),
-          borderRadius: BorderRadius.circular(16),
-          border: Border.all(color: accentBlue.withOpacity(0.4), width: 1.5),
-        ),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Icon(Icons.add_circle, color: accentBlue, size: 24),
-            SizedBox(width: 12),
-            Text(
-              'Top Up Balance',
-              style: TextStyle(
-                color: accentBlue,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-                letterSpacing: 0.5,
-              ),
-            ),
+  // ✅ NEW: Modern Balance Card (No Glow Effect)
+  Widget _buildModernBalanceCard() {
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            cardDark,
+            cardDarker,
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildRoleCard(Map<String, dynamic> role) {
-    final price = role['price'] ?? 0;
-    final canAfford = _balance >= price;
-    
-    return Container(
-      margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-      padding: const EdgeInsets.all(20),
-      decoration: BoxDecoration(
-        color: cardDark,
-        borderRadius: BorderRadius.circular(16),
+        borderRadius: BorderRadius.circular(20),
         border: Border.all(
-          color: canAfford ? goldColor.withOpacity(0.3) : Colors.white.withOpacity(0.1),
-          width: 1.5,
+          color: goldColor.withOpacity(0.3),
+          width: 1,
         ),
-        boxShadow: canAfford
-            ? [
-                BoxShadow(
-                  color: goldColor.withOpacity(0.2),
-                  blurRadius: 15,
-                  offset: Offset(0, 5),
-                ),
-              ]
-            : null,
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Your Balance',
+                    style: TextStyle(
+                      color: Colors.white60,
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                  SizedBox(height: 8),
+                  _isLoadingBalance
+                    ? ShimmerLoading(
+                        child: Container(
+                          width: 150,
+                          height: 32,
+                          decoration: BoxDecoration(
+                            color: Colors.white24,
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                        ),
+                      )
+                    : Text(
+                        'Rp ${_formatNumber(_balance)}',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 28,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                ],
+              ),
               Container(
                 padding: EdgeInsets.all(12),
                 decoration: BoxDecoration(
                   color: goldColor.withOpacity(0.2),
                   borderRadius: BorderRadius.circular(12),
                 ),
-                child: Icon(Icons.workspace_premium, color: goldColor, size: 28),
-              ),
-              SizedBox(width: 16),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      role['role_name'] ?? 'Unknown',
-                      style: TextStyle(
-                        color: Colors.white,
-                        fontSize: 20,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                    SizedBox(height: 4),
-                    Text(
-                      '${role['duration_days']} days access',
-                      style: TextStyle(
-                        color: Colors.white60,
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
+                child: Icon(
+                  Icons.account_balance_wallet,
+                  color: goldColor,
+                  size: 32,
                 ),
               ),
             ],
           ),
           
           SizedBox(height: 16),
-          Divider(color: Colors.white24),
-          SizedBox(height: 16),
           
-          if (role['features'] != null && role['features'].isNotEmpty)
-            ...List<Widget>.from(
-              (role['features'] as List).map((feature) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  children: [
-                    Icon(Icons.check_circle, color: accentGreen, size: 16),
-                    SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        feature,
-                        style: TextStyle(color: Colors.white70, fontSize: 13),
-                      ),
-                    ),
-                  ],
+          // Top Up Button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton.icon(
+              onPressed: () => _showTopUpDialog(),
+              icon: Icon(Icons.add_circle_outline, size: 20),
+              label: Text(
+                'Top Up Balance',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w600,
                 ),
-              )),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: goldColor,
+                foregroundColor: Colors.black,
+                padding: EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
             ),
-          
-          SizedBox(height: 16),
-          
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ✅ NEW: Role Carousel with Cards
+  Widget _buildRoleCarousel() {
+    if (_isLoadingRoles) {
+      return Column(
+        children: [
+          ShimmerLoading(
+            child: Container(
+              height: 400,
+              decoration: BoxDecoration(
+                color: Colors.white24,
+                borderRadius: BorderRadius.circular(20),
+              ),
+            ),
+          ),
+        ],
+      );
+    }
+
+    if (_roles.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            children: [
+              Icon(Icons.inventory_2_outlined, size: 64, color: Colors.white24),
+              SizedBox(height: 16),
+              Text(
+                'No roles available',
+                style: TextStyle(color: Colors.white60, fontSize: 16),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                'Available Roles',
+                style: TextStyle(
+                  color: Colors.white,
+                  fontSize: 20,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              Text(
+                '${_currentCarouselIndex + 1}/${_roles.length}',
+                style: TextStyle(
+                  color: Colors.white60,
+                  fontSize: 14,
+                ),
+              ),
+            ],
+          ),
+        ),
+        
+        SizedBox(height: 16),
+        
+        CarouselSlider.builder(
+          carouselController: _carouselController,
+          itemCount: _roles.length,
+          options: CarouselOptions(
+            height: 450,
+            enlargeCenterPage: true,
+            enableInfiniteScroll: false,
+            viewportFraction: 0.85,
+            onPageChanged: (index, reason) {
+              setState(() {
+                _currentCarouselIndex = index;
+              });
+            },
+          ),
+          itemBuilder: (context, index, realIndex) {
+            final role = _roles[index];
+            return _buildRoleCard(role);
+          },
+        ),
+        
+        SizedBox(height: 16),
+        
+        // Carousel indicators
+        Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: _roles.asMap().entries.map((entry) {
+            return Container(
+              width: _currentCarouselIndex == entry.key ? 24 : 8,
+              height: 8,
+              margin: EdgeInsets.symmetric(horizontal: 4),
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(4),
+                color: _currentCarouselIndex == entry.key
+                  ? goldColor
+                  : Colors.white24,
+              ),
+            );
+          }).toList(),
+        ),
+      ],
+    );
+  }
+
+  // ✅ IMPROVED: Role Card with Full Description from ROLE_CATALOG
+  Widget _buildRoleCard(Map<String, dynamic> role) {
+    final isCurrentRole = widget.role.toLowerCase() == role['role_id'].toLowerCase();
+    
+    // Role-specific styling
+    Color getRoleColor() {
+      switch (role['role_id'].toLowerCase()) {
+        case 'member': return accentBlue;
+        case 'vip': return accentPurple;
+        case 'reseller': return accentGreen;
+        default: return goldColor;
+      }
+    }
+    
+    // ✅ Get full description from role data
+    final description = role['description'] ?? 'No description available';
+    final features = List<String>.from(role['features'] ?? []);
+    
+    return Container(
+      width: double.infinity,
+      margin: EdgeInsets.symmetric(horizontal: 4),
+      padding: EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            cardDark,
+            cardDarker,
+          ],
+        ),
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(
+          color: isCurrentRole 
+            ? goldColor 
+            : getRoleColor().withOpacity(0.3),
+          width: isCurrentRole ? 2 : 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      'Price',
-                      style: TextStyle(
-                        color: Colors.white60,
-                        fontSize: 12,
+                    Container(
+                      padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: getRoleColor().withOpacity(0.2),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        role['role_name'] ?? role['role_id'],
+                        style: TextStyle(
+                          color: getRoleColor(),
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
                       ),
                     ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Rp ${_formatNumber(price)}',
-                      style: TextStyle(
-                        color: goldColor,
-                        fontSize: 24,
-                        fontWeight: FontWeight.bold,
+                    if (isCurrentRole) ...[
+                      SizedBox(height: 8),
+                      Row(
+                        children: [
+                          Icon(Icons.check_circle, color: goldColor, size: 16),
+                          SizedBox(width: 4),
+                          Text(
+                            'Current Role',
+                            style: TextStyle(
+                              color: goldColor,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
                       ),
-                    ),
+                    ],
                   ],
                 ),
               ),
-              ElevatedButton(
-                onPressed: canAfford ? () => _purchaseRole(role) : null,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: canAfford ? goldColor : Colors.grey,
-                  foregroundColor: Colors.black,
-                  padding: EdgeInsets.symmetric(horizontal: 24, vertical: 14),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(12),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.shopping_cart, size: 18),
-                    SizedBox(width: 8),
-                    Text(
-                      canAfford ? 'Purchase' : 'Insufficient',
-                      style: TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
+              Icon(
+                Icons.workspace_premium,
+                color: getRoleColor(),
+                size: 40,
               ),
             ],
+          ),
+          
+          SizedBox(height: 16),
+          
+          // ✅ Description from ROLE_CATALOG
+          Text(
+            description,
+            style: TextStyle(
+              color: Colors.white70,
+              fontSize: 14,
+              height: 1.5,
+            ),
+            maxLines: 3,
+            overflow: TextOverflow.ellipsis,
+          ),
+          
+          SizedBox(height: 16),
+          
+          // ✅ Features from ROLE_CATALOG
+          if (features.isNotEmpty) ...[
+            Text(
+              'Features:',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            SizedBox(height: 8),
+            ...features.take(3).map((feature) => Padding(
+              padding: EdgeInsets.only(bottom: 6),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    Icons.check_circle_outline,
+                    color: getRoleColor(),
+                    size: 16,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      feature,
+                      style: TextStyle(
+                        color: Colors.white70,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            )),
+            if (features.length > 3)
+              Padding(
+                padding: EdgeInsets.only(left: 24),
+                child: Text(
+                  '+${features.length - 3} more features',
+                  style: TextStyle(
+                    color: getRoleColor(),
+                    fontSize: 12,
+                    fontStyle: FontStyle.italic,
+                  ),
+                ),
+              ),
+            SizedBox(height: 16),
+          ],
+          
+          // Price & Duration
+          Container(
+            padding: EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: cardDarker,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Price',
+                      style: TextStyle(color: Colors.white60, fontSize: 13),
+                    ),
+                    Text(
+                      'Rp ${_formatNumber(role['price'])}',
+                      style: TextStyle(
+                        color: getRoleColor(),
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
+                SizedBox(height: 8),
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                  children: [
+                    Text(
+                      'Duration',
+                      style: TextStyle(color: Colors.white60, fontSize: 13),
+                    ),
+                    Text(
+                      '${role['duration_days']} days',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          
+          Spacer(),
+          
+          // Purchase Button
+          SizedBox(
+            width: double.infinity,
+            child: ElevatedButton(
+              onPressed: isCurrentRole ? null : () => _purchaseRole(role),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: getRoleColor(),
+                foregroundColor: Colors.white,
+                disabledBackgroundColor: Colors.grey,
+                padding: EdgeInsets.symmetric(vertical: 14),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                elevation: 0,
+              ),
+              child: Text(
+                isCurrentRole ? 'Current Role' : 'Purchase Now',
+                style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
           ),
         ],
       ),
@@ -906,133 +1089,78 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
   }
 
   // ==========================================
-  // 📜 TRANSACTIONS TAB
+  // 📜 HISTORY PAGE
   // ==========================================
 
-  Widget _buildTransactionsTab() {
-    if (_transactions.isEmpty && !_isLoadingTransactions) {
-      _loadTransactions();
-    }
-    
+  Widget _buildHistoryPage() {
     return RefreshIndicator(
       onRefresh: () async {
-        HapticFeedback.mediumImpact();
         await _loadTransactions();
-        _showInfoSnackbar('Transactions updated');
       },
       color: goldColor,
       backgroundColor: cardDark,
-      strokeWidth: 3.0,
       child: _isLoadingTransactions
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(color: goldColor),
-                  SizedBox(height: 16),
-                  Text(
-                    'Loading transactions...',
-                    style: TextStyle(color: Colors.white54, fontSize: 13),
-                  ),
-                ],
-              ),
-            )
-          : _transactions.isEmpty
-              ? ListView(
-                  physics: AlwaysScrollableScrollPhysics(
-                    parent: BouncingScrollPhysics(),
-                  ),
-                  children: [
-                    SizedBox(height: 100),
-                    Center(
-                      child: Column(
-                        children: [
-                          Icon(Icons.receipt_long, size: 64, color: Colors.white24),
-                          SizedBox(height: 16),
-                          Text(
-                            'No transactions yet',
-                            style: TextStyle(color: Colors.white60, fontSize: 16),
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'Pull down to refresh',
-                            style: TextStyle(color: Colors.white38, fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              : ListView.builder(
-                  physics: AlwaysScrollableScrollPhysics(
-                    parent: BouncingScrollPhysics(),
-                  ),
-                  padding: EdgeInsets.all(16),
-                  itemCount: _transactions.length + 1, // +1 for header
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      // Header with count
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
-                          children: [
-                            Icon(Icons.history, color: goldColor, size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              '${_transactions.length} Transaction${_transactions.length != 1 ? 's' : ''}',
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            Spacer(),
-                            Text(
-                              'Pull to refresh',
-                              style: TextStyle(
-                                color: Colors.white38,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                    return _buildTransactionCard(_transactions[index - 1]);
-                  },
+        ? Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(color: goldColor),
+                SizedBox(height: 16),
+                Text(
+                  'Loading transactions...',
+                  style: TextStyle(color: Colors.white60),
                 ),
+              ],
+            ),
+          )
+        : _transactions.isEmpty
+          ? ListView(
+              physics: AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(height: 100),
+                Center(
+                  child: Column(
+                    children: [
+                      Icon(Icons.receipt_long, size: 64, color: Colors.white24),
+                      SizedBox(height: 16),
+                      Text(
+                        'No transactions yet',
+                        style: TextStyle(color: Colors.white60, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : ListView.builder(
+              physics: AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.all(16),
+              itemCount: _transactions.length,
+              itemBuilder: (context, index) {
+                final transaction = _transactions[index];
+                return _buildTransactionCard(transaction);
+              },
+            ),
     );
   }
 
-  Widget _buildTransactionCard(Map<String, dynamic> tx) {
-    final type = tx['type'] ?? 'unknown';
-    final amount = tx['amount'] ?? 0;
-    final isPositive = amount > 0;
+  Widget _buildTransactionCard(Map<String, dynamic> transaction) {
+    final type = transaction['type'] ?? '';
+    final amount = transaction['amount'] ?? 0;
+    final createdAt = transaction['created_at'] ?? '';
     
-    Color typeColor;
-    IconData typeIcon;
-    String typeLabel;
+    IconData icon;
+    Color color;
     
-    switch (type) {
-      case 'topup':
-        typeColor = accentGreen;
-        typeIcon = Icons.add_circle;
-        typeLabel = 'Top Up';
-        break;
-      case 'purchase':
-        typeColor = accentPurple;
-        typeIcon = Icons.shopping_bag;
-        typeLabel = 'Purchase';
-        break;
-      case 'refund':
-        typeColor = accentBlue;
-        typeIcon = Icons.refresh;
-        typeLabel = 'Refund';
-        break;
-      default:
-        typeColor = Colors.grey;
-        typeIcon = Icons.help;
-        typeLabel = 'Other';
+    if (type == 'topup') {
+      icon = Icons.add_circle;
+      color = accentGreen;
+    } else if (type == 'purchase') {
+      icon = Icons.shopping_bag;
+      color = accentRed;
+    } else {
+      icon = Icons.swap_horiz;
+      color = accentBlue;
     }
     
     return Container(
@@ -1041,25 +1169,27 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
       decoration: BoxDecoration(
         color: cardDark,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: typeColor.withOpacity(0.3), width: 1),
+        border: Border.all(color: Colors.white10),
       ),
       child: Row(
         children: [
           Container(
-            padding: EdgeInsets.all(10),
+            padding: EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: typeColor.withOpacity(0.2),
-              borderRadius: BorderRadius.circular(10),
+              color: color.withOpacity(0.2),
+              borderRadius: BorderRadius.circular(12),
             ),
-            child: Icon(typeIcon, color: typeColor, size: 24),
+            child: Icon(icon, color: color, size: 24),
           ),
+          
           SizedBox(width: 16),
+          
           Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  tx['description'] ?? typeLabel,
+                  transaction['description'] ?? type.toUpperCase(),
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 15,
@@ -1068,19 +1198,20 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
                 ),
                 SizedBox(height: 4),
                 Text(
-                  _formatDateTime(tx['createdAt'] ?? ''),
+                  _formatDateTime(createdAt),
                   style: TextStyle(
-                    color: Colors.white54,
+                    color: Colors.white60,
                     fontSize: 12,
                   ),
                 ),
               ],
             ),
           ),
+          
           Text(
-            '${isPositive ? '+' : ''}Rp ${_formatNumber(amount.abs())}',
+            '${type == 'topup' ? '+' : '-'}Rp ${_formatNumber(amount)}',
             style: TextStyle(
-              color: isPositive ? accentGreen : accentRed,
+              color: type == 'topup' ? accentGreen : accentRed,
               fontSize: 16,
               fontWeight: FontWeight.bold,
             ),
@@ -1091,140 +1222,86 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
   }
 
   // ==========================================
-  // 📦 DEPOSITS TAB
+  // 📦 DEPOSITS PAGE
   // ==========================================
 
-  Widget _buildDepositsTab() {
-    if (_deposits.isEmpty && !_isLoadingDeposits) {
-      _loadDeposits();
-    }
-    
+  Widget _buildDepositsPage() {
     return RefreshIndicator(
       onRefresh: () async {
-        HapticFeedback.mediumImpact();
         await _loadDeposits();
-        _showInfoSnackbar('Deposits updated');
       },
       color: goldColor,
       backgroundColor: cardDark,
-      strokeWidth: 3.0,
       child: _isLoadingDeposits
-          ? Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(color: goldColor),
-                  SizedBox(height: 16),
-                  Text(
-                    'Loading deposits...',
-                    style: TextStyle(color: Colors.white54, fontSize: 13),
-                  ),
-                ],
-              ),
-            )
-          : _deposits.isEmpty
-              ? ListView(
-                  physics: AlwaysScrollableScrollPhysics(
-                    parent: BouncingScrollPhysics(),
-                  ),
-                  children: [
-                    SizedBox(height: 100),
-                    Center(
-                      child: Column(
-                        children: [
-                          Icon(Icons.inventory, size: 64, color: Colors.white24),
-                          SizedBox(height: 16),
-                          Text(
-                            'No deposit orders',
-                            style: TextStyle(color: Colors.white60, fontSize: 16),
-                          ),
-                          SizedBox(height: 8),
-                          Text(
-                            'Pull down to refresh',
-                            style: TextStyle(color: Colors.white38, fontSize: 12),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
-                )
-              : ListView.builder(
-                  physics: AlwaysScrollableScrollPhysics(
-                    parent: BouncingScrollPhysics(),
-                  ),
-                  padding: EdgeInsets.all(16),
-                  itemCount: _deposits.length + 1, // +1 for header
-                  itemBuilder: (context, index) {
-                    if (index == 0) {
-                      // Header with count and pending indicator
-                      final pendingCount = _deposits.where((d) => d['status'] == 'pending').length;
-                      return Padding(
-                        padding: const EdgeInsets.only(bottom: 12),
-                        child: Row(
-                          children: [
-                            Icon(Icons.inventory_2, color: goldColor, size: 20),
-                            SizedBox(width: 8),
-                            Text(
-                              '${_deposits.length} Deposit${_deposits.length != 1 ? 's' : ''}',
-                              style: TextStyle(
-                                color: Colors.white70,
-                                fontSize: 14,
-                                fontWeight: FontWeight.w600,
-                              ),
-                            ),
-                            if (pendingCount > 0) ...[
-                              SizedBox(width: 8),
-                              Container(
-                                padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                decoration: BoxDecoration(
-                                  color: Colors.orange.withOpacity(0.2),
-                                  borderRadius: BorderRadius.circular(10),
-                                  border: Border.all(color: Colors.orange.withOpacity(0.5)),
-                                ),
-                                child: Text(
-                                  '$pendingCount pending',
-                                  style: TextStyle(
-                                    color: Colors.orange,
-                                    fontSize: 10,
-                                    fontWeight: FontWeight.bold,
-                                  ),
-                                ),
-                              ),
-                            ],
-                            Spacer(),
-                            Text(
-                              'Pull to refresh',
-                              style: TextStyle(
-                                color: Colors.white38,
-                                fontSize: 11,
-                              ),
-                            ),
-                          ],
-                        ),
-                      );
-                    }
-                    return _buildDepositCard(_deposits[index - 1]);
-                  },
+        ? Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                CircularProgressIndicator(color: goldColor),
+                SizedBox(height: 16),
+                Text(
+                  'Loading deposits...',
+                  style: TextStyle(color: Colors.white60),
                 ),
+              ],
+            ),
+          )
+        : _deposits.isEmpty
+          ? ListView(
+              physics: AlwaysScrollableScrollPhysics(),
+              children: [
+                SizedBox(height: 100),
+                Center(
+                  child: Column(
+                    children: [
+                      Icon(Icons.inventory_2, size: 64, color: Colors.white24),
+                      SizedBox(height: 16),
+                      Text(
+                        'No pending deposits',
+                        style: TextStyle(color: Colors.white60, fontSize: 16),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            )
+          : ListView.builder(
+              physics: AlwaysScrollableScrollPhysics(),
+              padding: EdgeInsets.all(16),
+              itemCount: _deposits.length,
+              itemBuilder: (context, index) {
+                final deposit = _deposits[index];
+                return _buildDepositCard(deposit);
+              },
+            ),
     );
   }
 
   Widget _buildDepositCard(Map<String, dynamic> deposit) {
-    final status = deposit['status'] ?? 'unknown';
-    final Color statusColor;
+    final status = deposit['status'] ?? 'pending';
+    final amount = deposit['amount'] ?? 0;
+    final createdAt = deposit['created_at'] ?? '';
+    final orderId = deposit['order_id'] ?? '';
     
-    switch (status) {
+    Color statusColor;
+    IconData statusIcon;
+    
+    switch (status.toLowerCase()) {
       case 'completed':
         statusColor = accentGreen;
+        statusIcon = Icons.check_circle;
         break;
       case 'pending':
         statusColor = Colors.orange;
+        statusIcon = Icons.pending;
         break;
       case 'cancelled':
-        statusColor = Colors.grey;
+        statusColor = accentRed;
+        statusIcon = Icons.cancel;
         break;
       default:
-        statusColor = Colors.white;
+        statusColor = Colors.grey;
+        statusIcon = Icons.info;
     }
     
     return Container(
@@ -1233,92 +1310,85 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
       decoration: BoxDecoration(
         color: cardDark,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: statusColor.withOpacity(0.3), width: 1),
+        border: Border.all(color: statusColor.withOpacity(0.3)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Row(
+                      children: [
+                        Icon(statusIcon, color: statusColor, size: 20),
+                        SizedBox(width: 8),
+                        Text(
+                          status.toUpperCase(),
+                          style: TextStyle(
+                            color: statusColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                    SizedBox(height: 8),
                     Text(
-                      'Deposit Order',
+                      'Rp ${_formatNumber(amount)}',
                       style: TextStyle(
                         color: Colors.white,
-                        fontSize: 16,
+                        fontSize: 20,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
                     SizedBox(height: 4),
                     Text(
-                      deposit['order_id'] ?? '',
+                      _formatDateTime(createdAt),
                       style: TextStyle(
-                        color: Colors.white54,
-                        fontSize: 11,
-                        fontFamily: 'monospace',
+                        color: Colors.white60,
+                        fontSize: 12,
                       ),
                     ),
                   ],
                 ),
               ),
-              Container(
-                padding: EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                decoration: BoxDecoration(
-                  color: statusColor.withOpacity(0.2),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: statusColor, width: 1),
+              
+              if (status == 'pending')
+                IconButton(
+                  onPressed: () => _cancelDeposit(orderId),
+                  icon: Icon(Icons.close, color: accentRed),
+                  tooltip: 'Cancel',
                 ),
-                child: Text(
-                  status.toUpperCase(),
-                  style: TextStyle(
-                    color: statusColor,
-                    fontSize: 11,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-              ),
             ],
           ),
           
-          SizedBox(height: 12),
-          Divider(color: Colors.white24),
-          SizedBox(height: 12),
-          
-          _buildInfoRow('Amount', 'Rp ${_formatNumber(deposit['amount'] ?? 0)}', goldColor),
-          _buildInfoRow('Created', _formatDateTime(deposit['createdAt'] ?? ''), Colors.white60),
-          
           if (status == 'pending') ...[
             SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () {
-                      setState(() => _currentTopUp = deposit);
-                      _showQRISDialog();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: accentBlue,
-                      foregroundColor: Colors.white,
-                    ),
-                    child: Text('View QRIS'),
+            SizedBox(
+              width: double.infinity,
+              child: ElevatedButton.icon(
+                onPressed: () {
+                  setState(() {
+                    _currentTopUp = deposit;
+                  });
+                  _showQRDialog();
+                  _startAutoCheckPayment();
+                },
+                icon: Icon(Icons.qr_code, size: 18),
+                label: Text('Show QR Code'),
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: accentBlue,
+                  foregroundColor: Colors.white,
+                  padding: EdgeInsets.symmetric(vertical: 10),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(8),
                   ),
                 ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: OutlinedButton(
-                    onPressed: () => _cancelDeposit(deposit['order_id']),
-                    style: OutlinedButton.styleFrom(
-                      foregroundColor: Colors.grey,
-                      side: BorderSide(color: Colors.grey),
-                    ),
-                    child: Text('Cancel'),
-                  ),
-                ),
-              ],
+              ),
             ),
           ],
         ],
@@ -1327,379 +1397,363 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
   }
 
   // ==========================================
-  // 🎨 DIALOGS
+  // 💳 TOP UP DIALOG
   // ==========================================
 
   void _showTopUpDialog() {
-    final amounts = [10000, 25000, 50000, 100000, 250000, 500000];
-    int? selectedAmount;
-    final customController = TextEditingController();
+    final TextEditingController amountController = TextEditingController();
     
+    // ✅ BLUR BACKGROUND EFFECT
     showDialog(
       context: context,
-      builder: (context) => StatefulBuilder(
-        builder: (context, setDialogState) => AlertDialog(
-          backgroundColor: cardDark,
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              Icon(Icons.account_balance_wallet, color: goldColor),
-              SizedBox(width: 12),
-              Text(
-                'Top Up Balance',
-                style: TextStyle(color: Colors.white),
+      barrierColor: Colors.black87, // Darker barrier
+      builder: (context) => BackdropFilter(
+        filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10), // ✅ BLUR EFFECT
+        child: Dialog(
+          backgroundColor: Colors.transparent,
+          child: Container(
+            padding: EdgeInsets.all(24),
+            decoration: BoxDecoration(
+              color: cardDark,
+              borderRadius: BorderRadius.circular(20),
+              border: Border.all(
+                color: goldColor.withOpacity(0.3),
+                width: 1,
               ),
-            ],
-          ),
-          content: SingleChildScrollView(
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text(
-                  'Select amount:',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
+                Row(
+                  children: [
+                    Icon(Icons.account_balance_wallet, color: goldColor, size: 28),
+                    SizedBox(width: 12),
+                    Text(
+                      'Top Up Balance',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
-                SizedBox(height: 12),
+                
+                SizedBox(height: 20),
+                
+                // ✅ Show minimum topup
+                Container(
+                  padding: EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: accentBlue.withOpacity(0.1),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(
+                      color: accentBlue.withOpacity(0.3),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(Icons.info_outline, color: accentBlue, size: 20),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Minimum top up: Rp ${_formatNumber(_minTopup)}',
+                          style: TextStyle(
+                            color: accentBlue,
+                            fontSize: 13,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                
+                SizedBox(height: 16),
+                
+                TextField(
+                  controller: amountController,
+                  keyboardType: TextInputType.number,
+                  style: TextStyle(color: Colors.white),
+                  decoration: InputDecoration(
+                    labelText: 'Amount',
+                    labelStyle: TextStyle(color: Colors.white60),
+                    prefixText: 'Rp ',
+                    prefixStyle: TextStyle(color: Colors.white),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: Colors.white24),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(12),
+                      borderSide: BorderSide(color: goldColor),
+                    ),
+                  ),
+                ),
+                
+                SizedBox(height: 16),
+                
+                // Quick amount buttons
                 Wrap(
                   spacing: 8,
                   runSpacing: 8,
-                  children: amounts.map((amount) {
-                    final isSelected = selectedAmount == amount;
-                    return GestureDetector(
+                  children: [10000, 20000, 50000, 100000].map((amount) {
+                    return InkWell(
                       onTap: () {
-                        setDialogState(() {
-                          selectedAmount = amount;
-                          customController.clear();
-                        });
+                        amountController.text = amount.toString();
                       },
                       child: Container(
-                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                        padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                         decoration: BoxDecoration(
-                          color: isSelected ? goldColor.withOpacity(0.2) : cardDarker,
+                          color: cardDarker,
                           borderRadius: BorderRadius.circular(8),
-                          border: Border.all(
-                            color: isSelected ? goldColor : Colors.white24,
-                            width: isSelected ? 2 : 1,
-                          ),
+                          border: Border.all(color: goldColor.withOpacity(0.3)),
                         ),
                         child: Text(
                           'Rp ${_formatNumber(amount)}',
                           style: TextStyle(
-                            color: isSelected ? goldColor : Colors.white,
-                            fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            color: goldColor,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
                           ),
                         ),
                       ),
                     );
                   }).toList(),
                 ),
-                SizedBox(height: 16),
-                Text(
-                  'Or enter custom amount:',
-                  style: TextStyle(color: Colors.white70, fontSize: 14),
-                ),
-                SizedBox(height: 8),
-                TextField(
-                  controller: customController,
-                  keyboardType: TextInputType.number,
-                  style: TextStyle(color: Colors.white),
-                  decoration: InputDecoration(
-                    hintText: 'Enter amount',
-                    hintStyle: TextStyle(color: Colors.white38),
-                    filled: true,
-                    fillColor: cardDarker,
-                    border: OutlineInputBorder(
-                      borderRadius: BorderRadius.circular(8),
-                      borderSide: BorderSide.none,
-                    ),
-                    prefixText: 'Rp ',
-                    prefixStyle: TextStyle(color: Colors.white),
-                  ),
-                  onChanged: (value) {
-                    setDialogState(() {
-                      selectedAmount = null;
-                    });
-                  },
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: Text('Cancel', style: TextStyle(color: Colors.grey)),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                final amount = selectedAmount ?? int.tryParse(customController.text);
-                if (amount != null && amount >= 10000) {
-                  Navigator.pop(context);
-                  _createTopUp(amount);
-                } else {
-                  _showErrorSnackbar('Minimum top up is Rp 10.000');
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: goldColor,
-                foregroundColor: Colors.black,
-              ),
-              child: Text('Continue'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  void _showQRISDialog() {
-    if (_currentTopUp == null) return;
-    
-    showDialog(
-      context: context,
-      barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: cardDark,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Row(
-          children: [
-            Icon(Icons.qr_code_2, color: accentBlue),
-            SizedBox(width: 12),
-            Text(
-              'Scan QRIS',
-              style: TextStyle(color: Colors.white),
-            ),
-          ],
-        ),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              // QRIS Image
-              Container(
-                padding: EdgeInsets.all(16),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                ),
-                child: Image.network(
-                  _currentTopUp!['qris_url'],
-                  width: 250,
-                  height: 250,
-                  errorBuilder: (context, error, stackTrace) => Icon(
-                    Icons.error,
-                    size: 250,
-                    color: Colors.red,
-                  ),
-                ),
-              ),
-              
-              SizedBox(height: 20),
-              
-              Text(
-                'Amount to Pay',
-                style: TextStyle(color: Colors.white60, fontSize: 14),
-              ),
-              SizedBox(height: 4),
-              Text(
-                _currentTopUp!['amount_formatted'] ?? '',
-                style: TextStyle(
-                  color: goldColor,
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              
-              SizedBox(height: 20),
-              
-              Container(
-                padding: EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: accentBlue.withOpacity(0.1),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: accentBlue.withOpacity(0.3)),
-                ),
-                child: Column(
+                
+                SizedBox(height: 24),
+                
+                Row(
                   children: [
-                    Icon(Icons.info_outline, color: accentBlue, size: 20),
-                    SizedBox(height: 8),
-                    Text(
-                      'Scan the QR code with your e-wallet app',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white70, fontSize: 12),
+                    Expanded(
+                      child: TextButton(
+                        onPressed: () => Navigator.pop(context),
+                        child: Text(
+                          'Cancel',
+                          style: TextStyle(color: Colors.white60),
+                        ),
+                      ),
                     ),
-                    SizedBox(height: 4),
-                    Text(
-                      'Payment will be auto-verified',
-                      textAlign: TextAlign.center,
-                      style: TextStyle(color: Colors.white54, fontSize: 11),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () {
+                          final amount = int.tryParse(amountController.text) ?? 0;
+                          
+                          // ✅ Validate minimum topup
+                          if (amount < _minTopup) {
+                            _showErrorSnackbar('Minimum top up is Rp ${_formatNumber(_minTopup)}');
+                            return;
+                          }
+                          
+                          Navigator.pop(context);
+                          _createTopUp(amount);
+                        },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: goldColor,
+                          foregroundColor: Colors.black,
+                          padding: EdgeInsets.symmetric(vertical: 12),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                        child: Text(
+                          'Continue',
+                          style: TextStyle(fontWeight: FontWeight.bold),
+                        ),
+                      ),
                     ),
                   ],
                 ),
-              ),
-              
-              if (_isVerifyingPayment) ...[
-                SizedBox(height: 16),
-                CircularProgressIndicator(color: goldColor),
-                SizedBox(height: 8),
-                Text(
-                  'Checking payment...',
-                  style: TextStyle(color: Colors.white60, fontSize: 12),
-                ),
               ],
-            ],
+            ),
           ),
         ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              _stopAutoCheckPayment();
-              setState(() => _currentTopUp = null);
-              Navigator.pop(context);
-            },
-            child: Text('Cancel', style: TextStyle(color: Colors.grey)),
-          ),
-          ElevatedButton(
-            onPressed: _isVerifyingPayment
-                ? null
-                : () => _verifyTopUp(_currentTopUp!['order_id']),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: accentBlue,
-              foregroundColor: Colors.white,
-            ),
-            child: Text('Check Payment'),
-          ),
-        ],
       ),
     );
   }
 
-  Widget _buildConfirmDialog(Map<String, dynamic> role) {
-    final price = role['price'] ?? 0;
+  // ==========================================
+  // 📱 QR CODE DIALOG
+  // ==========================================
+
+  void _showQRDialog() {
+    if (_currentTopUp == null) return;
     
-    return AlertDialog(
-      backgroundColor: cardDark,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      title: Row(
-        children: [
-          Icon(Icons.warning_amber_rounded, color: goldColor),
-          SizedBox(width: 12),
-          Text(
-            'Confirm Purchase',
-            style: TextStyle(color: Colors.white),
-          ),
-        ],
-      ),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            'You are about to purchase:',
-            style: TextStyle(color: Colors.white70),
-          ),
-          SizedBox(height: 12),
-          Container(
-            padding: EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: cardDarker,
-              borderRadius: BorderRadius.circular(8),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  role['role_name'] ?? '',
-                  style: TextStyle(
-                    color: goldColor,
-                    fontSize: 18,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                SizedBox(height: 8),
-                _buildInfoRow('Price', 'Rp ${_formatNumber(price)}', Colors.white),
-                _buildInfoRow('Duration', '${role['duration_days']} days', Colors.white),
-                _buildInfoRow(
-                  'New Balance',
-                  'Rp ${_formatNumber(_balance - price)}',
-                  accentGreen,
-                ),
-              ],
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () => Navigator.pop(context, false),
-          child: Text('Cancel', style: TextStyle(color: Colors.grey)),
-        ),
-        ElevatedButton(
-          onPressed: () => Navigator.pop(context, true),
-          style: ElevatedButton.styleFrom(
-            backgroundColor: goldColor,
-            foregroundColor: Colors.black,
-          ),
-          child: Text('Confirm'),
-        ),
-      ],
-    );
-  }
-
-  void _showSuccessDialog(Map<String, dynamic> data) {
+    final qrImage = _currentTopUp!['qr_image'];
+    final amount = _currentTopUp!['amount'];
+    final orderId = _currentTopUp!['order_id'];
+    
+    // ✅ BLUR BACKGROUND EFFECT
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (context) => AlertDialog(
-        backgroundColor: cardDark,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-        title: Column(
-          children: [
-            Icon(Icons.check_circle, color: accentGreen, size: 64),
-            SizedBox(height: 16),
-            Text(
-              'Top Up Success!',
-              style: TextStyle(color: Colors.white),
-            ),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'Your balance has been updated',
-              style: TextStyle(color: Colors.white70),
-              textAlign: TextAlign.center,
-            ),
-            SizedBox(height: 16),
-            Text(
-              '+Rp ${_formatNumber(data['amount'] ?? 0)}',
-              style: TextStyle(
-                color: accentGreen,
-                fontSize: 32,
-                fontWeight: FontWeight.bold,
+      barrierColor: Colors.black87,
+      builder: (context) => WillPopScope(
+        onWillPop: () async {
+          _autoCheckTimer?.cancel();
+          setState(() => _currentTopUp = null);
+          return true;
+        },
+        child: BackdropFilter(
+          filter: ImageFilter.blur(sigmaX: 10, sigmaY: 10), // ✅ BLUR EFFECT
+          child: Dialog(
+            backgroundColor: Colors.transparent,
+            child: Container(
+              padding: EdgeInsets.all(24),
+              decoration: BoxDecoration(
+                color: cardDark,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: goldColor.withOpacity(0.3),
+                  width: 1,
+                ),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        'Scan QR Code',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      IconButton(
+                        onPressed: () {
+                          _autoCheckTimer?.cancel();
+                          setState(() => _currentTopUp = null);
+                          Navigator.pop(context);
+                        },
+                        icon: Icon(Icons.close, color: Colors.white60),
+                      ),
+                    ],
+                  ),
+                  
+                  SizedBox(height: 16),
+                  
+                  Container(
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: qrImage != null
+                      ? Image.memory(
+                          base64Decode(qrImage.split(',').last),
+                          width: 250,
+                          height: 250,
+                          fit: BoxFit.contain,
+                        )
+                      : Container(
+                          width: 250,
+                          height: 250,
+                          child: Center(
+                            child: Text('QR Code not available'),
+                          ),
+                        ),
+                  ),
+                  
+                  SizedBox(height: 20),
+                  
+                  Container(
+                    padding: EdgeInsets.all(16),
+                    decoration: BoxDecoration(
+                      color: cardDarker,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        _buildInfoRow('Amount', 'Rp ${_formatNumber(amount)}', goldColor),
+                        _buildInfoRow('Order ID', orderId, Colors.white),
+                      ],
+                    ),
+                  ),
+                  
+                  SizedBox(height: 16),
+                  
+                  if (_isVerifyingPayment)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: goldColor,
+                          ),
+                        ),
+                        SizedBox(width: 12),
+                        Text(
+                          'Checking payment...',
+                          style: TextStyle(
+                            color: Colors.white60,
+                            fontSize: 14,
+                          ),
+                        ),
+                      ],
+                    )
+                  else
+                    Container(
+                      padding: EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: accentGreen.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Row(
+                        children: [
+                          Icon(Icons.info_outline, color: accentGreen, size: 20),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Payment will be verified automatically',
+                              style: TextStyle(
+                                color: accentGreen,
+                                fontSize: 13,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  
+                  SizedBox(height: 16),
+                  
+                  SizedBox(
+                    width: double.infinity,
+                    child: ElevatedButton(
+                      onPressed: _isVerifyingPayment ? null : _verifyPayment,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: accentBlue,
+                        foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(vertical: 14),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      child: Text(
+                        'Check Payment Status',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            SizedBox(height: 8),
-            Text(
-              'New Balance: Rp ${_formatNumber(data['new_balance'] ?? 0)}',
-              style: TextStyle(color: goldColor, fontSize: 16),
-            ),
-          ],
-        ),
-        actions: [
-          ElevatedButton(
-            onPressed: () => Navigator.pop(context),
-            style: ElevatedButton.styleFrom(
-              backgroundColor: accentGreen,
-              foregroundColor: Colors.white,
-            ),
-            child: Text('OK'),
           ),
-        ],
+        ),
       ),
     );
   }
+
+  // ==========================================
+  // ✅ SUCCESS DIALOG
+  // ==========================================
 
   void _showPurchaseSuccessDialog(Map<String, dynamic> data) {
     showDialog(
@@ -1944,9 +1998,10 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
         setState(() {
           _currentTabIndex = index;
         });
-        if (index == 1 && _transactions.isEmpty) {
+        // ✅ FIX: Load data only once when switching tabs
+        if (index == 1 && _transactions.isEmpty && !_isLoadingTransactions) {
           _loadTransactions();
-        } else if (index == 2 && _deposits.isEmpty) {
+        } else if (index == 2 && _deposits.isEmpty && !_isLoadingDeposits) {
           _loadDeposits();
         }
       },
@@ -1976,6 +2031,66 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
           ],
         ),
       ),
+    );
+  }
+}
+
+// ==========================================
+// ✨ SHIMMER LOADING WIDGET
+// ==========================================
+
+class ShimmerLoading extends StatefulWidget {
+  final Widget child;
+  
+  const ShimmerLoading({super.key, required this.child});
+
+  @override
+  State<ShimmerLoading> createState() => _ShimmerLoadingState();
+}
+
+class _ShimmerLoadingState extends State<ShimmerLoading> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: Duration(milliseconds: 1500),
+    )..repeat();
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, child) {
+        return ShaderMask(
+          shaderCallback: (bounds) {
+            return LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [
+                Colors.white10,
+                Colors.white24,
+                Colors.white10,
+              ],
+              stops: [
+                _controller.value - 0.3,
+                _controller.value,
+                _controller.value + 0.3,
+              ],
+            ).createShader(bounds);
+          },
+          child: widget.child,
+        );
+      },
     );
   }
 }
