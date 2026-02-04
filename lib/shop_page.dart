@@ -2,7 +2,7 @@ import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:video_player/video_player.dart';
 import 'package:chewie/chewie.dart';
-import 'role_shop_page.dart'; // ← GANTI DARI nokos_page.dart KE role_shop_page.dart
+import 'role_shop_page.dart';
 import 'bugshop_page.dart';
 
 class ShopPage extends StatefulWidget {
@@ -106,7 +106,6 @@ class _ShopPageState extends State<ShopPage> with TickerProviderStateMixin {
     super.dispose();
   }
 
-  // ← GANTI NAMA FUNGSI DAN NAVIGASI
   void _navigateToRoleShop() {
     Navigator.push(
       context,
@@ -258,7 +257,7 @@ class _ShopPageState extends State<ShopPage> with TickerProviderStateMixin {
           BoxShadow(
             color: Colors.black.withOpacity(0.5),
             blurRadius: 15,
-            spreadRadius: 1,
+            spreadRadius: 2,
           ),
         ],
       ),
@@ -492,18 +491,18 @@ class _ShopPageState extends State<ShopPage> with TickerProviderStateMixin {
                   _buildVideoBanner(),
                   const SizedBox(height: 8),
                   
-                  // ← GANTI DARI NOKOS SHOP KE ROLE SHOP
+                  // Role Shop Button
                   _buildShopButton(
-                    icon: Icons.store, // ← Icon berubah dari phone_android
-                    title: "Role Shop", // ← Title berubah
-                    description: "Upgrade your membership role", // ← Description berubah
-                    color: goldColor, // ← Color berubah ke gold untuk premium feel
-                    onTap: _navigateToRoleShop, // ← OnTap berubah
+                    icon: Icons.store,
+                    title: "Role Shop",
+                    description: "Upgrade your membership role",
+                    color: goldColor,
+                    onTap: _navigateToRoleShop,
                   ),
                   
                   const SizedBox(height: 6),
                   
-                  // Bug Shop Button (Tetap sama)
+                  // Bug Shop Button
                   _buildShopButton(
                     icon: Icons.bug_report,
                     title: "Bug Shop",
