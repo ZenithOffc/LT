@@ -1815,8 +1815,8 @@ class _RoleShopBalancePageState extends State<RoleShopBalancePage> with SingleTi
     );
   }
 
-  String _formatNumber(int number) {
-    return number.toString().replaceAllMapped(
+  String _formatNumber(num number) {
+    return number.toInt().toString().replaceAllMapped(
       RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'),
       (Match m) => '${m[1]}.',
     );
